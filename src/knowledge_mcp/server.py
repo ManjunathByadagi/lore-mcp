@@ -63,7 +63,15 @@ if SENTRY_DSN:
 app = Server("knowledge-mcp")
 
 # Database Configuration (will be initialized in main())
-db = None  # Database client (LocalPostgresClient or SupabaseWrapper)
+# Database Configuration
+try:
+    db = get_db_client()
+    backend = os.getenv("DB_BACKEND", "local")
+    logger.info(f"Connected to database backend: {backend}")
+except Exception as e:
+    logger.error(f"Failed to initialize database: {e}")
+    db = None
+
 
 # Search Configuration (consolidated from search-mcp)
 LATVIAN_LEARNING_ROOT = Path(get_env("LATVIAN_LEARNING_ROOT", "/srv/latvian_learning"))
@@ -959,7 +967,7 @@ def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, 
         updated_result = db.table("knowledge.kb_entries")\
             .select("*")\
             .eq("kb_id", entry_id)\
-            .single()\
+            .maybe_single()\
             .execute()
 
         updated_fields = list(update_data.keys())
@@ -2176,7 +2184,7 @@ def main():
 
     # Set environment defaults for local PostgreSQL (primary backend)
     os.environ.setdefault('DB_BACKEND', 'local')
-    os.environ.setdefault('DB_HOST', 'localhost')
+    os.environ.setdefault('DB_HOST', '192.168.1.12')
     os.environ.setdefault('DB_PORT', '5433')
     os.environ.setdefault('DB_NAME', 'mpm_system')
     os.environ.setdefault('DB_USER', 'latvian_user')
