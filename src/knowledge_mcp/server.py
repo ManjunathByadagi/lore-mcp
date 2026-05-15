@@ -222,7 +222,8 @@ _TOOL_DEFINITIONS = [
                     "entry_id": {"type": "string", "description": "UUID of entry to update"},
                     "content": {"type": "string", "description": "New content text"},
                     "metadata": {"type": "object", "description": "Updated metadata object"},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Updated tags array"}
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Updated tags array"},
+                    "topic": {"type": "string", "description": "Updated topic/category for the entry"}
                 },
                 "required": ["entry_id"]
             }
@@ -908,7 +909,7 @@ def handle_kb_list(topic: str = None) -> dict:
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, tags: list = None) -> dict:
+def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, tags: list = None, topic: str = None) -> dict:
     """Update existing KB entry with partial updates support.
 
     Updates only the provided fields, preserving existing fields not specified.
@@ -946,6 +947,9 @@ def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, 
 
         if tags is not None:
             update_data["tags"] = tags
+
+        if topic is not None:
+            update_data["topic"] = topic
 
         # Always update the updated_at timestamp
         update_data["updated_at"] = datetime.utcnow().isoformat()
