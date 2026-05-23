@@ -9,7 +9,7 @@ description = "Unified knowledge management MCP server with document intelligenc
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Knowledge-MCP Contributors", email = "contact@knowledge-mcp.dev"},
+    {name = "Knowledge-MCP Contributors", email = "contact@lore-mcp.dev"},
 ]
 keywords = ["mcp", "knowledge-management", "ai", "claude", "research", "documentation"]
 classifiers = [
@@ -68,10 +68,10 @@ test = [
 lore-mcp = "lore.server:main"
 
 [project.urls]
-Homepage = "https://github.com/your-org/knowledge-mcp"
-Documentation = "https://github.com/your-org/knowledge-mcp#readme"
-Repository = "https://github.com/your-org/knowledge-mcp.git"
-Issues = "https://github.com/your-org/knowledge-mcp/issues"
+Homepage = "https://github.com/your-org/lore-mcp"
+Documentation = "https://github.com/your-org/lore-mcp#readme"
+Repository = "https://github.com/your-org/lore-mcp.git"
+Issues = "https://github.com/your-org/lore-mcp/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
