@@ -401,10 +401,9 @@ class TableQuery:
             # Dicts are serialized to JSONB
             return json.dumps(value)
         elif isinstance(value, list):
-            # Serialize to JSON string for JSONB columns (tags column is JSONB)
-            # psycopg2 would encode Python lists as text[] which conflicts with jsonb type
-            import json
-            return json.dumps(value)
+            # Pass lists directly — psycopg2 maps Python list → text[] natively.
+            # JSON-encoding would break text[] columns (malformed array literal error).
+            return value
         return value
 
     def _execute_insert(self, cursor) -> QueryResult:

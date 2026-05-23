@@ -1,0 +1,13 @@
+{"version": 2, "width": 72, "height": 24, "timestamp": 1779559630, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.007944, "o", "\u001b[H\u001b[2J\u001b[3J"]
+[0.008747, "o", "\r\n  Lore MCP  —  operational knowledge for your AI agents\r\n  ───────────────────────────────────────────────────────\r\n\r\n"]
+[1.510033, "o", "  $ # Agents start fresh every session. Lore fixes that.\r\n"]
+[2.712749, "o", "\r\n  $ # ── Step 1: capture a hard-won ops gotcha ──────────\r\n"]
+[3.315052, "o", "\r\n  $ lore kb_add  proxmox  "]
+[3.717084, "o", "\"LXC inherits host resolv.conf — Tailscale breaks DNS\"\r\n"]
+[4.246951, "o", "  ✓ added  [kb_1af48f7c3ce4]\r\n"]
+[5.777051, "o", "\r\n  $ # ── Step 2: any agent searches — gets it instantly ──\r\n"]
+[6.379448, "o", "\r\n  $ lore kb_search  "]
+[6.681223, "o", "\"proxmox dns lxc\"\r\n"]
+[7.304734, "o", "  4 result(s)\r\n\r\n  [kb_6405dcf1c526]  Proxmox LXC inherits host /etc/resolv.conf — Tailscale resolver breaks containers without Tailscale\r\n  author: —   verified: unverified\r\n\r\n  [kb_08ec0780d9e9]  Remote BuildKit + registry mirror setup for offload builds (2026-05-05)\r\n  author: —   verified: unverified\r\n\r\n"]
+[9.339986, "o", "  $ # Every session. Every agent. Fully briefed.\r\n\r\n"]

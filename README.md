@@ -10,6 +10,10 @@
 
 ---
 
+![Lore demo](docs/demo.gif)
+
+---
+
 ## The Problem
 
 Your agents start every session knowing nothing about your systems. Every runbook you've written. Every gotcha you've hit. Every incident you've debugged. None of it carries forward.
