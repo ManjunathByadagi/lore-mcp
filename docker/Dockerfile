@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN groupadd -r knowledge && useradd -r -g knowledge knowledge
+RUN groupadd -r lore && useradd -r -g lore lore
 
 # Set working directory
 WORKDIR /app
@@ -46,20 +46,20 @@ COPY --from=builder /app/dist/*.whl ./
 RUN uv pip install --system *.whl
 
 # Create data directories
-RUN mkdir -p /data/knowledge && \
+RUN mkdir -p /data/lore && \
     mkdir -p /data/logs && \
-    chown -R knowledge:knowledge /data
+    chown -R lore:lore /data
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh
 
 # Switch to non-root user
-USER knowledge
+USER lore
 
 # Set environment variables
 ENV PYTHONPATH=/app
-ENV KNOWLEDGE_DATA_DIR=/data/knowledge
+ENV KNOWLEDGE_DATA_DIR=/data/lore
 ENV KNOWLEDGE_LOG_LEVEL=INFO
 
 # Expose port (if running HTTP mode)
@@ -67,8 +67,8 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import knowledge_mcp; print('Knowledge MCP is healthy')" || exit 1
+    CMD python -c "import lore; print('lore-mcp is healthy')" || exit 1
 
 # Default command
 ENTRYPOINT ["./entrypoint.sh"]
-CMD ["knowledge-mcp"]
+CMD ["lore-mcp"]
