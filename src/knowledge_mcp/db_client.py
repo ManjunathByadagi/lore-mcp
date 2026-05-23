@@ -26,17 +26,18 @@ Usage:
     db.table("kb_entries").delete().eq("kb_id", "123").execute()
 """
 
-import os
 import logging
-from enum import Enum
-from typing import Optional, Any, Dict, List, Union
+import os
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Optional, Union
 
 logger = logging.getLogger(__name__)
 
 
 class DatabaseBackend(Enum):
     """Supported database backends."""
+
     SUPABASE = "supabase"
     LOCAL = "local"
     SQLITE = "sqlite"
@@ -45,9 +46,10 @@ class DatabaseBackend(Enum):
 @dataclass
 class QueryResult:
     """Unified query result across backends."""
-    data: List[Dict[str, Any]]
-    count: Optional[int] = None
-    error: Optional[str] = None
+
+    data: list[dict[str, Any]]
+    count: int | None = None
+    error: str | None = None
 
 
 class LocalPostgresClient:
@@ -63,12 +65,13 @@ class LocalPostgresClient:
         port: int = 5433,
         database: str = "mpm_system",
         user: str = "latvian_user",
-        password: str = ""
+        password: str = "",
     ):
         """Initialize local PostgreSQL connection."""
         try:
             import psycopg2
             import psycopg2.extras
+
             self._psycopg2 = psycopg2
             self._extras = psycopg2.extras
         except ImportError:
@@ -91,27 +94,27 @@ class LocalPostgresClient:
                 port=self.port,
                 database=self.database,
                 user=self.user,
-                password=self.password
+                password=self.password,
             )
             # Force UTF-8 decoding even when server_encoding is SQL_ASCII.
             # Without this, psycopg2 uses ASCII and chokes on multi-byte chars (0xe2 etc).
-            self._conn.set_client_encoding('UTF8')
+            self._conn.set_client_encoding("UTF8")
             self._conn.autocommit = True
             logger.debug("Created new PostgreSQL connection")
         return self._conn
 
-    def table(self, name: str) -> 'TableQuery':
+    def table(self, name: str) -> "TableQuery":
         """Start a query on a table (Supabase-compatible interface)."""
         return TableQuery(self, name)
 
-    def rpc(self, function_name: str, params: Dict[str, Any] = None) -> QueryResult:
+    def rpc(self, function_name: str, params: dict[str, Any] = None) -> QueryResult:
         """Call a stored function (RPC)."""
         conn = self._get_connection()
         cursor = conn.cursor(cursor_factory=self._extras.RealDictCursor)
 
         if params:
             # Build named parameter syntax: function_name(param1 => %s, param2 => %s)
-            param_list = ', '.join([f"{k} => %s" for k in params.keys()])
+            param_list = ", ".join([f"{k} => %s" for k in params.keys()])
             sql = f"SELECT * FROM {function_name}({param_list})"
             cursor.execute(sql, list(params.values()))
         else:
@@ -148,113 +151,113 @@ class TableQuery:
         self._operation = "select"
         self._columns = "*"
         self._data = None
-        self._filters: List[tuple] = []
-        self._order_by: List[tuple] = []
-        self._limit_val: Optional[int] = None
-        self._offset_val: Optional[int] = None
-        self._on_conflict: Optional[str] = None
-        self._count_mode: Optional[str] = None
+        self._filters: list[tuple] = []
+        self._order_by: list[tuple] = []
+        self._limit_val: int | None = None
+        self._offset_val: int | None = None
+        self._on_conflict: str | None = None
+        self._count_mode: str | None = None
         self._single_result: bool = False  # For maybe_single() support
-        self._or_filters: List[str] = []  # For OR conditions
+        self._or_filters: list[str] = []  # For OR conditions
 
-    def select(self, columns: str = "*", count: str = None) -> 'TableQuery':
+    def select(self, columns: str = "*", count: str = None) -> "TableQuery":
         """Select columns from table."""
         self._operation = "select"
         self._columns = columns
         self._count_mode = count  # "exact", "planned", or "estimated"
         return self
 
-    def insert(self, data: Union[Dict, List[Dict]], upsert: bool = False) -> 'TableQuery':
+    def insert(self, data: Union[dict, list[dict]], upsert: bool = False) -> "TableQuery":
         """Insert data into table."""
         self._operation = "upsert" if upsert else "insert"
         self._data = data if isinstance(data, list) else [data]
         return self
 
-    def upsert(self, data: Union[Dict, List[Dict]], on_conflict: str = None) -> 'TableQuery':
+    def upsert(self, data: Union[dict, list[dict]], on_conflict: str = None) -> "TableQuery":
         """Upsert (insert or update on conflict)."""
         self._operation = "upsert"
         self._data = data if isinstance(data, list) else [data]
         self._on_conflict = on_conflict
         return self
 
-    def update(self, data: Dict) -> 'TableQuery':
+    def update(self, data: dict) -> "TableQuery":
         """Update rows in table."""
         self._operation = "update"
         self._data = data
         return self
 
-    def delete(self) -> 'TableQuery':
+    def delete(self) -> "TableQuery":
         """Delete rows from table."""
         self._operation = "delete"
         return self
 
     # Filter methods
-    def eq(self, column: str, value: Any) -> 'TableQuery':
+    def eq(self, column: str, value: Any) -> "TableQuery":
         """Equal to."""
         self._filters.append((column, "=", value))
         return self
 
-    def neq(self, column: str, value: Any) -> 'TableQuery':
+    def neq(self, column: str, value: Any) -> "TableQuery":
         """Not equal to."""
         self._filters.append((column, "!=", value))
         return self
 
-    def gt(self, column: str, value: Any) -> 'TableQuery':
+    def gt(self, column: str, value: Any) -> "TableQuery":
         """Greater than."""
         self._filters.append((column, ">", value))
         return self
 
-    def gte(self, column: str, value: Any) -> 'TableQuery':
+    def gte(self, column: str, value: Any) -> "TableQuery":
         """Greater than or equal."""
         self._filters.append((column, ">=", value))
         return self
 
-    def lt(self, column: str, value: Any) -> 'TableQuery':
+    def lt(self, column: str, value: Any) -> "TableQuery":
         """Less than."""
         self._filters.append((column, "<", value))
         return self
 
-    def lte(self, column: str, value: Any) -> 'TableQuery':
+    def lte(self, column: str, value: Any) -> "TableQuery":
         """Less than or equal."""
         self._filters.append((column, "<=", value))
         return self
 
-    def like(self, column: str, pattern: str) -> 'TableQuery':
+    def like(self, column: str, pattern: str) -> "TableQuery":
         """LIKE pattern match."""
         self._filters.append((column, "LIKE", pattern))
         return self
 
-    def ilike(self, column: str, pattern: str) -> 'TableQuery':
+    def ilike(self, column: str, pattern: str) -> "TableQuery":
         """Case-insensitive LIKE."""
         self._filters.append((column, "ILIKE", pattern))
         return self
 
-    def in_(self, column: str, values: List[Any]) -> 'TableQuery':
+    def in_(self, column: str, values: list[Any]) -> "TableQuery":
         """IN list of values."""
         self._filters.append((column, "IN", tuple(values)))
         return self
 
-    def is_(self, column: str, value: Any) -> 'TableQuery':
+    def is_(self, column: str, value: Any) -> "TableQuery":
         """IS (for NULL checks)."""
         self._filters.append((column, "IS", value))
         return self
 
-    def order(self, column: str, desc: bool = False) -> 'TableQuery':
+    def order(self, column: str, desc: bool = False) -> "TableQuery":
         """Order by column."""
         self._order_by.append((column, "DESC" if desc else "ASC"))
         return self
 
-    def limit(self, count: int) -> 'TableQuery':
+    def limit(self, count: int) -> "TableQuery":
         """Limit number of results."""
         self._limit_val = count
         return self
 
-    def offset(self, count: int) -> 'TableQuery':
+    def offset(self, count: int) -> "TableQuery":
         """Offset results."""
         self._offset_val = count
         return self
 
-    def or_(self, conditions: str) -> 'TableQuery':
+    def or_(self, conditions: str) -> "TableQuery":
         """
         Add OR conditions (Supabase-compatible).
 
@@ -266,7 +269,7 @@ class TableQuery:
         self._or_filters.append(conditions)
         return self
 
-    def maybe_single(self) -> 'TableQuery':
+    def maybe_single(self) -> "TableQuery":
         """
         Return single result or None (Supabase-compatible).
 
@@ -313,7 +316,7 @@ class TableQuery:
                 else:
                     conditions.append(f"{column} IS NOT NULL")
             elif op == "IN":
-                placeholders = ', '.join(['%s'] * len(value))
+                placeholders = ", ".join(["%s"] * len(value))
                 conditions.append(f"{column} IN ({placeholders})")
                 values.extend(value)
             else:
@@ -323,16 +326,16 @@ class TableQuery:
         # Handle OR filters (full-text search)
         for or_condition in self._or_filters:
             # Parse Supabase-style: "title.wfts.query,content.wfts.query"
-            or_parts = or_condition.split(',')
+            or_parts = or_condition.split(",")
             or_conditions = []
 
             for part in or_parts:
-                if '.wfts.' in part or '.plfts.' in part:
+                if ".wfts." in part or ".plfts." in part:
                     # Full-text search: "title.wfts.search_term"
-                    column, operator, search_term = part.split('.', 2)
+                    column, operator, search_term = part.split(".", 2)
 
                     # Use PostgreSQL's full-text search
-                    if operator == 'wfts':
+                    if operator == "wfts":
                         # Web search syntax (phrase-aware)
                         or_conditions.append(
                             f"to_tsvector('english', {column}) @@ websearch_to_tsquery('english', %s)"
@@ -386,13 +389,14 @@ class TableQuery:
         if self._count_mode == "exact":
             count_sql = f"SELECT COUNT(*) FROM {self.table}{where_clause}"
             cursor.execute(count_sql, where_values)
-            count = cursor.fetchone()['count']
+            count = cursor.fetchone()["count"]
 
         return QueryResult(data=data, count=count)
 
     def _serialize_value(self, value):
         """Serialize Python objects to PostgreSQL-compatible types."""
         import json
+
         if isinstance(value, dict):
             # Dicts are serialized to JSONB
             return json.dumps(value)
@@ -410,8 +414,8 @@ class TableQuery:
             return QueryResult(data=[], error="No data to insert")
 
         columns = list(self._data[0].keys())
-        col_names = ', '.join(columns)
-        placeholders = ', '.join(['%s'] * len(columns))
+        col_names = ", ".join(columns)
+        placeholders = ", ".join(["%s"] * len(columns))
 
         sql = f"INSERT INTO {self.table} ({col_names}) VALUES ({placeholders}) RETURNING *"
 
@@ -429,14 +433,16 @@ class TableQuery:
             return QueryResult(data=[], error="No data to upsert")
 
         columns = list(self._data[0].keys())
-        col_names = ', '.join(columns)
-        placeholders = ', '.join(['%s'] * len(columns))
+        col_names = ", ".join(columns)
+        placeholders = ", ".join(["%s"] * len(columns))
 
         # Determine conflict target
         conflict_col = self._on_conflict or columns[0]  # Default to first column
 
         # Build SET clause for update
-        update_sets = ', '.join([f"{col} = EXCLUDED.{col}" for col in columns if col != conflict_col])
+        update_sets = ", ".join(
+            [f"{col} = EXCLUDED.{col}" for col in columns if col != conflict_col]
+        )
 
         sql = f"""
             INSERT INTO {self.table} ({col_names})
@@ -496,6 +502,7 @@ class SupabaseWrapper:
         """Initialize Supabase client."""
         try:
             from supabase import create_client
+
             self._client = create_client(url, key)
         except ImportError:
             raise ImportError("supabase-py is required for Supabase connections")
@@ -506,7 +513,7 @@ class SupabaseWrapper:
         """Return Supabase table query builder."""
         return SupabaseTableWrapper(self._client.table(name))
 
-    def rpc(self, function_name: str, params: Dict[str, Any] = None) -> QueryResult:
+    def rpc(self, function_name: str, params: dict[str, Any] = None) -> QueryResult:
         """Call a stored function (RPC)."""
         response = self._client.rpc(function_name, params or {}).execute()
         return QueryResult(data=response.data if response.data else [])
@@ -526,12 +533,14 @@ class SupabaseTableWrapper:
         """Proxy all method calls to underlying query."""
         attr = getattr(self._query, name)
         if callable(attr):
+
             def wrapper(*args, **kwargs):
                 result = attr(*args, **kwargs)
                 # If result is another query builder, wrap it
-                if hasattr(result, 'execute'):
+                if hasattr(result, "execute"):
                     return SupabaseTableWrapper(result)
                 return result
+
             return wrapper
         return attr
 
@@ -539,8 +548,7 @@ class SupabaseTableWrapper:
         """Execute and return QueryResult."""
         response = self._query.execute()
         return QueryResult(
-            data=response.data if response.data else [],
-            count=getattr(response, 'count', None)
+            data=response.data if response.data else [], count=getattr(response, "count", None)
         )
 
 
@@ -640,6 +648,7 @@ def _sqlite_map_table(name: str) -> str:
 def _sqlite_deserialize_row(row: dict) -> dict:
     """Parse JSON strings back into Python lists/dicts for known JSON columns."""
     import json
+
     result = {}
     for key, value in row.items():
         if isinstance(value, str) and len(value) > 0 and value[0] in ("{", "["):
@@ -655,6 +664,7 @@ def _sqlite_deserialize_row(row: dict) -> dict:
 def _sqlite_serialize_value(value: Any) -> Any:
     """Serialize Python lists/dicts to JSON strings for SQLite storage."""
     import json
+
     if isinstance(value, (dict, list)):
         return json.dumps(value)
     return value
@@ -669,53 +679,53 @@ class SqliteTableQuery:
     Modifiers: order, limit, offset, maybe_single
     """
 
-    def __init__(self, client: 'SqliteClient', table: str):
+    def __init__(self, client: "SqliteClient", table: str):
         self._client = client
         # Map schema-qualified names to flat SQLite table names
         self._table = _sqlite_map_table(table)
         self._operation = "select"
         self._columns = "*"
         self._data: Any = None
-        self._filters: List[tuple] = []
-        self._or_filters: List[str] = []
-        self._order_by: List[tuple] = []
-        self._limit_val: Optional[int] = None
-        self._offset_val: Optional[int] = None
-        self._on_conflict: Optional[str] = None
-        self._count_mode: Optional[str] = None
+        self._filters: list[tuple] = []
+        self._or_filters: list[str] = []
+        self._order_by: list[tuple] = []
+        self._limit_val: int | None = None
+        self._offset_val: int | None = None
+        self._on_conflict: str | None = None
+        self._count_mode: str | None = None
         self._single_result: bool = False
 
     # ------------------------------------------------------------------ #
     # Operation setters                                                    #
     # ------------------------------------------------------------------ #
 
-    def select(self, columns: str = "*", count: str = None) -> 'SqliteTableQuery':
+    def select(self, columns: str = "*", count: str = None) -> "SqliteTableQuery":
         """Select columns from table."""
         self._operation = "select"
         self._columns = columns
         self._count_mode = count
         return self
 
-    def insert(self, data: Union[Dict, List[Dict]], upsert: bool = False) -> 'SqliteTableQuery':
+    def insert(self, data: Union[dict, list[dict]], upsert: bool = False) -> "SqliteTableQuery":
         """Insert data into table."""
         self._operation = "upsert" if upsert else "insert"
         self._data = data if isinstance(data, list) else [data]
         return self
 
-    def upsert(self, data: Union[Dict, List[Dict]], on_conflict: str = None) -> 'SqliteTableQuery':
+    def upsert(self, data: Union[dict, list[dict]], on_conflict: str = None) -> "SqliteTableQuery":
         """Upsert (INSERT OR REPLACE) data into table."""
         self._operation = "upsert"
         self._data = data if isinstance(data, list) else [data]
         self._on_conflict = on_conflict
         return self
 
-    def update(self, data: Dict) -> 'SqliteTableQuery':
+    def update(self, data: dict) -> "SqliteTableQuery":
         """Update rows in table."""
         self._operation = "update"
         self._data = data
         return self
 
-    def delete(self) -> 'SqliteTableQuery':
+    def delete(self) -> "SqliteTableQuery":
         """Delete rows from table."""
         self._operation = "delete"
         return self
@@ -724,51 +734,51 @@ class SqliteTableQuery:
     # Filter methods                                                       #
     # ------------------------------------------------------------------ #
 
-    def eq(self, column: str, value: Any) -> 'SqliteTableQuery':
+    def eq(self, column: str, value: Any) -> "SqliteTableQuery":
         self._filters.append((column, "=", value))
         return self
 
-    def neq(self, column: str, value: Any) -> 'SqliteTableQuery':
+    def neq(self, column: str, value: Any) -> "SqliteTableQuery":
         self._filters.append((column, "!=", value))
         return self
 
-    def gt(self, column: str, value: Any) -> 'SqliteTableQuery':
+    def gt(self, column: str, value: Any) -> "SqliteTableQuery":
         self._filters.append((column, ">", value))
         return self
 
-    def gte(self, column: str, value: Any) -> 'SqliteTableQuery':
+    def gte(self, column: str, value: Any) -> "SqliteTableQuery":
         self._filters.append((column, ">=", value))
         return self
 
-    def lt(self, column: str, value: Any) -> 'SqliteTableQuery':
+    def lt(self, column: str, value: Any) -> "SqliteTableQuery":
         self._filters.append((column, "<", value))
         return self
 
-    def lte(self, column: str, value: Any) -> 'SqliteTableQuery':
+    def lte(self, column: str, value: Any) -> "SqliteTableQuery":
         self._filters.append((column, "<=", value))
         return self
 
-    def like(self, column: str, pattern: str) -> 'SqliteTableQuery':
+    def like(self, column: str, pattern: str) -> "SqliteTableQuery":
         """LIKE pattern match (case-sensitive in SQLite by default)."""
         self._filters.append((column, "LIKE", pattern))
         return self
 
-    def ilike(self, column: str, pattern: str) -> 'SqliteTableQuery':
+    def ilike(self, column: str, pattern: str) -> "SqliteTableQuery":
         """Case-insensitive LIKE via LOWER()."""
         # Store as a special tuple so _build_where_clause can emit LOWER(col) LIKE LOWER(?)
         self._filters.append((column, "ILIKE", pattern))
         return self
 
-    def in_(self, column: str, values: List[Any]) -> 'SqliteTableQuery':
+    def in_(self, column: str, values: list[Any]) -> "SqliteTableQuery":
         self._filters.append((column, "IN", tuple(values)))
         return self
 
-    def is_(self, column: str, value: Any) -> 'SqliteTableQuery':
+    def is_(self, column: str, value: Any) -> "SqliteTableQuery":
         """IS (for NULL checks)."""
         self._filters.append((column, "IS", value))
         return self
 
-    def or_(self, conditions: str) -> 'SqliteTableQuery':
+    def or_(self, conditions: str) -> "SqliteTableQuery":
         """
         OR conditions using Supabase-style syntax.
 
@@ -783,19 +793,19 @@ class SqliteTableQuery:
     # Modifier methods                                                     #
     # ------------------------------------------------------------------ #
 
-    def order(self, column: str, desc: bool = False) -> 'SqliteTableQuery':
+    def order(self, column: str, desc: bool = False) -> "SqliteTableQuery":
         self._order_by.append((column, "DESC" if desc else "ASC"))
         return self
 
-    def limit(self, count: int) -> 'SqliteTableQuery':
+    def limit(self, count: int) -> "SqliteTableQuery":
         self._limit_val = count
         return self
 
-    def offset(self, count: int) -> 'SqliteTableQuery':
+    def offset(self, count: int) -> "SqliteTableQuery":
         self._offset_val = count
         return self
 
-    def maybe_single(self) -> 'SqliteTableQuery':
+    def maybe_single(self) -> "SqliteTableQuery":
         """Return a single object or None instead of a list."""
         self._limit_val = 1
         self._single_result = True
@@ -831,8 +841,8 @@ class SqliteTableQuery:
 
     def _build_where_clause(self) -> tuple:
         """Return (where_sql, params_list) for current filters."""
-        conditions: List[str] = []
-        values: List[Any] = []
+        conditions: list[str] = []
+        values: list[Any] = []
 
         for column, op, value in self._filters:
             if op == "IS":
@@ -855,7 +865,7 @@ class SqliteTableQuery:
         # OR conditions — Supabase wfts/plfts → LIKE fallback
         for or_condition in self._or_filters:
             parts = or_condition.split(",")
-            or_parts: List[str] = []
+            or_parts: list[str] = []
             for part in parts:
                 part = part.strip()
                 if ".wfts." in part or ".plfts." in part:
@@ -885,7 +895,7 @@ class SqliteTableQuery:
         parts = [f"{col} {direction}" for col, direction in self._order_by]
         return " ORDER BY " + ", ".join(parts)
 
-    def _fetch_rows(self, conn, sql: str, params: list) -> List[Dict[str, Any]]:
+    def _fetch_rows(self, conn, sql: str, params: list) -> list[dict[str, Any]]:
         """Execute a SELECT and return list of dicts with JSON columns parsed."""
         cursor = conn.execute(sql, params)
         col_names = [description[0] for description in cursor.description]
@@ -911,7 +921,7 @@ class SqliteTableQuery:
 
         data = self._fetch_rows(conn, sql, where_values)
 
-        count: Optional[int] = None
+        count: int | None = None
         if self._count_mode == "exact":
             count_sql = f"SELECT COUNT(*) FROM {self._table}{where_clause}"
             (count,) = conn.execute(count_sql, where_values).fetchone()
@@ -931,7 +941,7 @@ class SqliteTableQuery:
         placeholders = ", ".join(["?"] * len(columns))
         sql = f"INSERT INTO {self._table} ({col_names}) VALUES ({placeholders})"
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for row in self._data:
             values = [_sqlite_serialize_value(row.get(col)) for col in columns]
             conn.execute(sql, values)
@@ -956,7 +966,7 @@ class SqliteTableQuery:
         placeholders = ", ".join(["?"] * len(columns))
         sql = f"INSERT OR REPLACE INTO {self._table} ({col_names}) VALUES ({placeholders})"
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for row in self._data:
             values = [_sqlite_serialize_value(row.get(col)) for col in columns]
             conn.execute(sql, values)
@@ -978,8 +988,8 @@ class SqliteTableQuery:
         data_with_ts = dict(self._data)
         data_with_ts["updated_at"] = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
 
-        set_parts: List[str] = []
-        set_values: List[Any] = []
+        set_parts: list[str] = []
+        set_values: list[Any] = []
         for col, val in data_with_ts.items():
             if col == "updated_at":
                 # Embed the SQLite datetime expression directly (not a param)
@@ -1045,11 +1055,13 @@ class SqliteClient:
 
     def __init__(self, db_path: str = "./knowledge-data/knowledge.db"):
         import sqlite3
+
         self._sqlite3 = sqlite3
         self._db_path = db_path
-        self._conn: Optional[Any] = None
+        self._conn: Any | None = None
         # Ensure parent directory exists
         from pathlib import Path
+
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         # Open connection and initialise schema immediately
         self._get_connection()
@@ -1081,7 +1093,7 @@ class SqliteClient:
         """Start a query on a table (Supabase-compatible interface)."""
         return SqliteTableQuery(self, name)
 
-    def rpc(self, function_name: str, params: Dict[str, Any] = None) -> QueryResult:
+    def rpc(self, function_name: str, params: dict[str, Any] = None) -> QueryResult:
         """
         RPC stub — not used for core KB operations in the SQLite backend.
 
@@ -1099,8 +1111,7 @@ class SqliteClient:
 
 
 def get_db_client(
-    backend: DatabaseBackend = None,
-    **kwargs
+    backend: DatabaseBackend = None, **kwargs
 ) -> Union[LocalPostgresClient, SupabaseWrapper]:
     """
     Get database client based on backend configuration.
@@ -1144,6 +1155,7 @@ def get_db_client(
         )
     elif backend == DatabaseBackend.SQLITE:
         from pathlib import Path
+
         db_path = kwargs.get(
             "db_path",
             os.getenv(

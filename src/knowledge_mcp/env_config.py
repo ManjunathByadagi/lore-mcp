@@ -53,7 +53,7 @@ def load_env_file():
 load_env_file()
 
 
-def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
+def get_env(key: str, default: str | None = None) -> str | None:
     """
     Get environment variable with optional default.
 

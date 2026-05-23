@@ -9,12 +9,7 @@ class ResponseEnvelope:
     @staticmethod
     def success(message: str, data: Any = None) -> dict:
         """Create a success response."""
-        return {
-            "ok": True,
-            "error": None,
-            "message": message,
-            "data": data or {}
-        }
+        return {"ok": True, "error": None, "message": message, "data": data or {}}
 
     @staticmethod
     def ok(message: str, data: Any = None) -> dict:
@@ -24,16 +19,12 @@ class ResponseEnvelope:
     @staticmethod
     def error(code: str, message: str, data: Any = None) -> dict:
         """Create an error response."""
-        return {
-            "ok": False,
-            "error": code,
-            "message": message,
-            "data": data or {}
-        }
+        return {"ok": False, "error": code, "message": message, "data": data or {}}
 
 
 class ErrorCodes:
     """Common error codes across all servers."""
+
     UNEXPECTED_EXCEPTION = "unexpected_exception"
     INVALID_ARGUMENT = "invalid_argument"
     INVALID_INPUT = "invalid_input"  # Alias for INVALID_ARGUMENT

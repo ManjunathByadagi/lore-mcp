@@ -8,13 +8,13 @@ This module provides functionality to:
 - Track changes and versions
 """
 
-import re
 import ast
-import time
 import logging
-from pathlib import Path
-from typing import Dict, List, Any, Tuple
+import re
+import time
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,9 @@ class MCPIndexScanner:
         self.db = db_client
         self.servers_path = Path("/srv/latvian_mcp/servers")
 
-    def scan_all_servers(self, triggered_by: str = "manual", config_filter: bool = True, config_path: str = None) -> Dict[str, Any]:
+    def scan_all_servers(
+        self, triggered_by: str = "manual", config_filter: bool = True, config_path: str = None
+    ) -> dict[str, Any]:
         """
         Scan all MCP servers and index their tools.
 
@@ -51,7 +53,9 @@ class MCPIndexScanner:
         if config_filter:
             configured_servers = self._read_claude_config(config_path)
             if configured_servers:
-                logger.info(f"Config filtering enabled: scanning only {len(configured_servers)} configured servers")
+                logger.info(
+                    f"Config filtering enabled: scanning only {len(configured_servers)} configured servers"
+                )
                 logger.debug(f"Configured servers: {configured_servers}")
 
         scanned_servers = []
@@ -60,7 +64,7 @@ class MCPIndexScanner:
 
         # Scan each server directory
         for server_dir in self.servers_path.iterdir():
-            if not server_dir.is_dir() or server_dir.name.startswith('.'):
+            if not server_dir.is_dir() or server_dir.name.startswith("."):
                 continue
 
             # Skip if not in configured servers (when filtering enabled)
@@ -96,18 +100,13 @@ class MCPIndexScanner:
         changes = {
             "added": [s for s in scanned_servers if s not in existing_server_ids],
             "removed": list(removed_servers),
-            "modified": []  # TODO: Implement change detection
+            "modified": [],  # TODO: Implement change detection
         }
 
         # Record scan version
         scan_duration = int((time.time() - start_time) * 1000)
         version = self._record_scan_version(
-            len(scanned_servers),
-            len(all_tools),
-            changes,
-            scan_duration,
-            errors,
-            triggered_by
+            len(scanned_servers), len(all_tools), changes, scan_duration, errors, triggered_by
         )
 
         logger.info(f"Scan complete: {len(scanned_servers)} servers, {len(all_tools)} tools")
@@ -118,10 +117,10 @@ class MCPIndexScanner:
             "tools_indexed": len(all_tools),
             "changes": changes,
             "scan_duration_ms": scan_duration,
-            "errors": errors
+            "errors": errors,
         }
 
-    def _scan_server(self, server_dir: Path) -> Tuple[Dict, List[Dict]]:
+    def _scan_server(self, server_dir: Path) -> tuple[dict, list[dict]]:
         """
         Scan a single MCP server directory.
 
@@ -157,7 +156,7 @@ class MCPIndexScanner:
             "tool_count": len(tools),
             "description": description,
             "tags": self._infer_tags(server_id),
-            "last_scanned": datetime.utcnow().isoformat()
+            "last_scanned": datetime.utcnow().isoformat(),
         }
 
         return server_data, tools
@@ -165,7 +164,7 @@ class MCPIndexScanner:
     def _find_server_file(self, server_dir: Path, server_id: str) -> Path:
         """Find the server.py file for a given server."""
         # Try src/<server_module>/server.py
-        module_name = server_id.replace('-', '_')
+        module_name = server_id.replace("-", "_")
         server_file = server_dir / "src" / module_name / "server.py"
 
         if not server_file.exists():
@@ -177,7 +176,7 @@ class MCPIndexScanner:
 
         return server_file
 
-    def _parse_server_tools(self, server_file: Path, server_id: str) -> List[Dict]:
+    def _parse_server_tools(self, server_file: Path, server_id: str) -> list[dict]:
         """
         Parse tool definitions from server.py file.
 
@@ -186,7 +185,7 @@ class MCPIndexScanner:
         tools = []
 
         try:
-            with open(server_file, 'r') as f:
+            with open(server_file) as f:
                 content = f.read()
 
             # Parse Python AST
@@ -194,7 +193,10 @@ class MCPIndexScanner:
 
             # Find list_tools function (can be async or sync)
             for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == 'list_tools':
+                if (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "list_tools"
+                ):
                     # Extract tool definitions from return statement
                     tools = self._extract_tools_from_ast(node, server_id)
                     break
@@ -206,7 +208,7 @@ class MCPIndexScanner:
 
         return tools
 
-    def _extract_tools_from_ast(self, func_node: ast.FunctionDef, server_id: str) -> List[Dict]:
+    def _extract_tools_from_ast(self, func_node: ast.FunctionDef, server_id: str) -> list[dict]:
         """Extract tool definitions from list_tools function AST."""
         tools = []
 
@@ -222,13 +224,9 @@ class MCPIndexScanner:
 
         return tools
 
-    def _parse_tool_call(self, tool_node: ast.Call, server_id: str) -> Dict:
+    def _parse_tool_call(self, tool_node: ast.Call, server_id: str) -> dict:
         """Parse a single types.Tool(...) call."""
-        tool_data = {
-            "server_id": server_id,
-            "tags": [],
-            "use_cases": []
-        }
+        tool_data = {"server_id": server_id, "tags": [], "use_cases": []}
 
         # Extract keyword arguments
         for keyword in tool_node.keywords:
@@ -252,7 +250,9 @@ class MCPIndexScanner:
                 try:
                     tool_data["input_schema"] = self._ast_dict_to_python(value)
                 except Exception as e:
-                    logger.warning(f"Could not parse inputSchema for {tool_data.get('tool_name', 'unknown')}: {e}")
+                    logger.warning(
+                        f"Could not parse inputSchema for {tool_data.get('tool_name', 'unknown')}: {e}"
+                    )
                     # Skip this tool if we can't parse its schema
                     return None
 
@@ -265,7 +265,7 @@ class MCPIndexScanner:
 
         return None
 
-    def _ast_dict_to_python(self, ast_dict: ast.Dict) -> Dict:
+    def _ast_dict_to_python(self, ast_dict: ast.Dict) -> dict:
         """
         Convert an AST Dict node to a Python dict, handling f-strings and other expressions.
 
@@ -334,7 +334,7 @@ class MCPIndexScanner:
             # For other expression types, return a placeholder
             return f"<expression: {type(node).__name__}>"
 
-    def _categorize_tool(self, tool_data: Dict) -> str:
+    def _categorize_tool(self, tool_data: dict) -> str:
         """Categorize tool based on name and description."""
         name = tool_data.get("tool_name", "").lower()
         desc = tool_data.get("description", "").lower()
@@ -344,32 +344,49 @@ class MCPIndexScanner:
             return "search"
 
         # Storage tools
-        if any(word in name or word in desc for word in ["add", "insert", "store", "save", "put", "upload"]):
+        if any(
+            word in name or word in desc
+            for word in ["add", "insert", "store", "save", "put", "upload"]
+        ):
             return "storage"
 
         # Processing tools
-        if any(word in name or word in desc for word in ["process", "transform", "transcribe", "generate", "normalize"]):
+        if any(
+            word in name or word in desc
+            for word in ["process", "transform", "transcribe", "generate", "normalize"]
+        ):
             return "processing"
 
         # Orchestration tools
-        if any(word in name or word in desc for word in ["job", "recipe", "plan", "workflow", "queue"]):
+        if any(
+            word in name or word in desc for word in ["job", "recipe", "plan", "workflow", "queue"]
+        ):
             return "orchestration"
 
         # Monitoring tools
-        if any(word in name or word in desc for word in ["status", "health", "monitor", "check", "usage"]):
+        if any(
+            word in name or word in desc
+            for word in ["status", "health", "monitor", "check", "usage"]
+        ):
             return "monitoring"
 
         # Admin tools
-        if any(word in name or word in desc for word in ["restart", "stop", "kill", "deploy", "scan", "rebuild"]):
+        if any(
+            word in name or word in desc
+            for word in ["restart", "stop", "kill", "deploy", "scan", "rebuild"]
+        ):
             return "admin"
 
         # Analysis tools
-        if any(word in name or word in desc for word in ["analyze", "evaluate", "audit", "compare", "metrics"]):
+        if any(
+            word in name or word in desc
+            for word in ["analyze", "evaluate", "audit", "compare", "metrics"]
+        ):
             return "analysis"
 
         return "general"
 
-    def _extract_tool_tags(self, tool_data: Dict) -> List[str]:
+    def _extract_tool_tags(self, tool_data: dict) -> list[str]:
         """Extract relevant tags from tool name and description."""
         tags = []
         name = tool_data.get("tool_name", "").lower()
@@ -400,7 +417,7 @@ class MCPIndexScanner:
 
         return list(set(tags))  # Remove duplicates
 
-    def _generate_usage_example(self, tool_data: Dict) -> str:
+    def _generate_usage_example(self, tool_data: dict) -> str:
         """Generate a usage example for the tool."""
         full_name = tool_data.get("full_name", "")
         tool_name = tool_data.get("tool_name", "")
@@ -409,11 +426,11 @@ class MCPIndexScanner:
         if "search" in tool_name:
             return f'{full_name}("your search query")'
         elif "add" in tool_name or "create" in tool_name:
-            return f'{full_name}(data={{...}})'
+            return f"{full_name}(data={{...}})"
         elif "get" in tool_name or "list" in tool_name:
-            return f'{full_name}()'
+            return f"{full_name}()"
         else:
-            return f'{full_name}(...)'
+            return f"{full_name}(...)"
 
     def _detect_python_version(self, server_dir: Path) -> str:
         """Detect Python version used by server."""
@@ -422,16 +439,14 @@ class MCPIndexScanner:
         if venv_python.exists():
             try:
                 import subprocess
+
                 result = subprocess.run(
-                    [str(venv_python), "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
+                    [str(venv_python), "--version"], capture_output=True, text=True, timeout=5
                 )
                 if result.returncode == 0:
                     # Parse "Python 3.13.0" -> "3.13"
                     version = result.stdout.strip().split()[1]
-                    major, minor = version.split('.')[:2]
+                    major, minor = version.split(".")[:2]
                     return f"{major}.{minor}"
             except Exception:
                 pass
@@ -441,7 +456,7 @@ class MCPIndexScanner:
     def _extract_server_description(self, server_file: Path) -> str:
         """Extract description from server.py module docstring."""
         try:
-            with open(server_file, 'r') as f:
+            with open(server_file) as f:
                 content = f.read()
 
             tree = ast.parse(content)
@@ -449,14 +464,14 @@ class MCPIndexScanner:
 
             if docstring:
                 # Return first line of docstring
-                return docstring.split('\n')[0].strip()
+                return docstring.split("\n")[0].strip()
 
         except Exception:
             pass
 
         return ""
 
-    def _infer_tags(self, server_id: str) -> List[str]:
+    def _infer_tags(self, server_id: str) -> list[str]:
         """Infer tags from server ID."""
         tags = []
 
@@ -481,7 +496,7 @@ class MCPIndexScanner:
 
         return list(set(tags))
 
-    def _get_existing_servers(self) -> List[Dict]:
+    def _get_existing_servers(self) -> list[dict]:
         """Get existing servers from database."""
         try:
             result = self.db.table("mcp_servers").select("*").execute()
@@ -490,47 +505,41 @@ class MCPIndexScanner:
             logger.warning(f"Could not fetch existing servers: {e}")
             return []
 
-    def _upsert_server(self, server_data: Dict):
+    def _upsert_server(self, server_data: dict):
         """Insert or update server in database."""
         try:
-            self.db.table("mcp_servers")\
-                .upsert(server_data, on_conflict="server_id")\
-                .execute()
+            self.db.table("mcp_servers").upsert(server_data, on_conflict="server_id").execute()
         except Exception as e:
             logger.error(f"Error upserting server {server_data['server_id']}: {e}")
             raise
 
-    def _upsert_tools(self, tools: List[Dict]):
+    def _upsert_tools(self, tools: list[dict]):
         """Insert or update tools in database."""
         for tool in tools:
             try:
-                self.db.table("mcp_tools")\
-                    .upsert(tool, on_conflict="tool_id")\
-                    .execute()
+                self.db.table("mcp_tools").upsert(tool, on_conflict="tool_id").execute()
             except Exception as e:
                 logger.error(f"Error upserting tool {tool.get('tool_id')}: {e}")
 
     def _mark_server_inactive(self, server_id: str):
         """Mark a server as inactive."""
         try:
-            self.db.table("mcp_servers")\
-                .update({"status": "inactive"})\
-                .eq("server_id", server_id)\
-                .execute()
+            self.db.table("mcp_servers").update({"status": "inactive"}).eq(
+                "server_id", server_id
+            ).execute()
         except Exception as e:
             logger.error(f"Error marking server {server_id} inactive: {e}")
 
     def _mark_server_available(self, server_id: str):
         """Mark a server as available (installed but not configured)."""
         try:
-            self.db.table("mcp_servers")\
-                .update({"status": "available"})\
-                .eq("server_id", server_id)\
-                .execute()
+            self.db.table("mcp_servers").update({"status": "available"}).eq(
+                "server_id", server_id
+            ).execute()
         except Exception as e:
             logger.error(f"Error marking server {server_id} available: {e}")
 
-    def _read_claude_config(self, config_path: str = None) -> List[str]:
+    def _read_claude_config(self, config_path: str = None) -> list[str]:
         """
         Read Claude Code configuration from multiple sources and merge.
 
@@ -546,8 +555,8 @@ class MCPIndexScanner:
             List of ALL configured server IDs from all sources, or None if no configs found
         """
         import json
-        from pathlib import Path
         import os
+        from pathlib import Path
 
         configured_servers = set()  # Use set to deduplicate
         sources_found = []
@@ -560,7 +569,7 @@ class MCPIndexScanner:
 
         if user_config_path.exists():
             try:
-                with open(user_config_path, 'r') as f:
+                with open(user_config_path) as f:
                     config = json.load(f)
                 mcp_servers = config.get("mcpServers", {})
                 tier1_count = len(mcp_servers)
@@ -578,7 +587,7 @@ class MCPIndexScanner:
             project_config = current_dir / ".mcp.json"
             if project_config.exists():
                 try:
-                    with open(project_config, 'r') as f:
+                    with open(project_config) as f:
                         config = json.load(f)
                     mcp_servers = config.get("mcpServers", {})
                     tier2_count = len(mcp_servers)
@@ -598,7 +607,7 @@ class MCPIndexScanner:
         master_config = Path("/srv/latvian_mcp/config/mcp_servers.master.json")
         if master_config.exists():
             try:
-                with open(master_config, 'r') as f:
+                with open(master_config) as f:
                     config = json.load(f)
                 # Filter out comment entries and metadata
                 master_servers = [k for k in config.keys() if not k.startswith("_")]
@@ -607,7 +616,9 @@ class MCPIndexScanner:
                 new_servers = set(master_servers) - configured_servers
                 if new_servers:
                     configured_servers.update(new_servers)
-                    sources_found.append(f"Master: {len(new_servers)} additional servers from {master_config}")
+                    sources_found.append(
+                        f"Master: {len(new_servers)} additional servers from {master_config}"
+                    )
                     logger.info(f"Found {len(new_servers)} additional servers in master config")
             except Exception as e:
                 logger.error(f"Error reading master config: {e}")
@@ -621,19 +632,31 @@ class MCPIndexScanner:
         logger.info(f"Configuration sources: {', '.join(sources_found)}")
         return result
 
-    def _record_scan_version(self, servers_scanned: int, tools_indexed: int,
-                            changes: Dict, scan_duration: int,
-                            errors: List[str], triggered_by: str) -> int:
+    def _record_scan_version(
+        self,
+        servers_scanned: int,
+        tools_indexed: int,
+        changes: dict,
+        scan_duration: int,
+        errors: list[str],
+        triggered_by: str,
+    ) -> int:
         """Record scan version in database."""
         try:
-            result = self.db.table("mcp_index_versions").insert({
-                "servers_scanned": servers_scanned,
-                "tools_indexed": tools_indexed,
-                "changes": changes,
-                "scan_duration_ms": scan_duration,
-                "errors": errors,
-                "triggered_by": triggered_by
-            }).execute()
+            result = (
+                self.db.table("mcp_index_versions")
+                .insert(
+                    {
+                        "servers_scanned": servers_scanned,
+                        "tools_indexed": tools_indexed,
+                        "changes": changes,
+                        "scan_duration_ms": scan_duration,
+                        "errors": errors,
+                        "triggered_by": triggered_by,
+                    }
+                )
+                .execute()
+            )
 
             if result.data:
                 return result.data[0]["version_id"]
@@ -643,7 +666,7 @@ class MCPIndexScanner:
 
         return -1
 
-    def search_tools(self, query: str, category: str = None, limit: int = 20) -> List[Dict]:
+    def search_tools(self, query: str, category: str = None, limit: int = 20) -> list[dict]:
         """
         Search for tools using PostgreSQL full-text search.
 
@@ -660,9 +683,11 @@ class MCPIndexScanner:
             # For now, using ILIKE as a fallback since Supabase client doesn't expose ts_rank easily
             # Future: Use raw SQL for better full-text search with ranking
 
-            query_builder = self.db.table("mcp_tools")\
-                .select("*, mcp_servers!inner(server_name, status)")\
+            query_builder = (
+                self.db.table("mcp_tools")
+                .select("*, mcp_servers!inner(server_name, status)")
                 .eq("mcp_servers.status", "active")
+            )
 
             # Build OR conditions for each search term
             search_terms = query.lower().split()
@@ -687,50 +712,49 @@ class MCPIndexScanner:
             logger.error(f"Error searching tools: {e}")
             return []
 
-    def get_server_tools(self, server_id: str) -> Dict:
+    def get_server_tools(self, server_id: str) -> dict:
         """Get all tools for a specific server."""
         try:
             # Get server info
-            server_result = self.db.table("mcp_servers")\
-                .select("*")\
-                .eq("server_id", server_id)\
-                .execute()
+            server_result = (
+                self.db.table("mcp_servers").select("*").eq("server_id", server_id).execute()
+            )
 
             if not server_result.data:
                 return None
 
             # Get tools
-            tools_result = self.db.table("mcp_tools")\
-                .select("*")\
-                .eq("server_id", server_id)\
-                .execute()
+            tools_result = (
+                self.db.table("mcp_tools").select("*").eq("server_id", server_id).execute()
+            )
 
-            return {
-                "server": server_result.data[0],
-                "tools": tools_result.data
-            }
+            return {"server": server_result.data[0], "tools": tools_result.data}
 
         except Exception as e:
             logger.error(f"Error getting server tools: {e}")
             return None
 
-    def get_tool_details(self, tool_name: str) -> Dict:
+    def get_tool_details(self, tool_name: str) -> dict:
         """Get detailed information about a specific tool."""
         try:
             # Try exact match on tool_name
-            result = self.db.table("mcp_tools")\
-                .select("*, mcp_servers(server_name, status)")\
-                .eq("tool_name", tool_name)\
+            result = (
+                self.db.table("mcp_tools")
+                .select("*, mcp_servers(server_name, status)")
+                .eq("tool_name", tool_name)
                 .execute()
+            )
 
             if result.data:
                 return result.data[0]
 
             # Try match on full_name
-            result = self.db.table("mcp_tools")\
-                .select("*, mcp_servers(server_name, status)")\
-                .ilike("full_name", f"%{tool_name}%")\
+            result = (
+                self.db.table("mcp_tools")
+                .select("*, mcp_servers(server_name, status)")
+                .ilike("full_name", f"%{tool_name}%")
                 .execute()
+            )
 
             if result.data:
                 return result.data[0]

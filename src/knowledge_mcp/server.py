@@ -13,39 +13,38 @@ Spec: Lore v0.4.0 — KG and source-tracking tool surfaces removed; research sur
 renamed to investigations; attribution model added (author, source_type, verified).
 """
 
-import os
-import sys
+import glob as glob_module
+import hashlib
 import json
 import logging
-import threading
+import os
 import re
-from pathlib import Path
-from typing import Any, List, Dict, Optional
-from datetime import datetime, date
+import sys
+import threading
 import uuid
-import hashlib
-import glob as glob_module
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Optional
 
 import jsonschema
 import sentry_sdk
 import yaml
+from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp import types
+
+from .db_client import DatabaseBackend, get_db_client
 
 # Import document processor and MCP scanner
 from .doc_processor import DocumentProcessor
-from .mcp_index_scanner import MCPIndexScanner
-
-from .response import ResponseEnvelope, ErrorCodes
 from .env_config import get_env, require_env
-from .db_client import get_db_client, DatabaseBackend
+from .mcp_index_scanner import MCPIndexScanner
+from .response import ErrorCodes, ResponseEnvelope
 
 # Initialize logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -96,11 +95,16 @@ def format_response(response: dict) -> list[types.TextContent]:
 def _sanitize_search_query(query: str) -> str:
     """Strip PostgREST filter metacharacters to prevent filter injection."""
     # Remove commas, dots, parentheses, and PostgREST operator tokens
-    sanitized = re.sub(r'[,.()\[\]]', ' ', query)
+    sanitized = re.sub(r"[,.()\[\]]", " ", query)
     # Strip known PostgREST operator patterns
-    sanitized = re.sub(r'\b(wfts|plfts|fts|phfts|ilike|like|eq|neq|gt|gte|lt|lte|in|is)\b', '', sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(
+        r"\b(wfts|plfts|fts|phfts|ilike|like|eq|neq|gt|gte|lt|lte|in|is)\b",
+        "",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
     # Collapse whitespace
-    return ' '.join(sanitized.split()).strip()
+    return " ".join(sanitized.split()).strip()
 
 
 def _coerce_arguments(arguments: dict, schema: dict) -> dict:
@@ -176,398 +180,442 @@ def _coerce_arguments(arguments: dict, schema: dict) -> dict:
 # Keeping them here avoids duplicating schemas and enables synchronous schema
 # lookups inside call_tool() for the array-coercion fix.
 _TOOL_DEFINITIONS = [
-        # Knowledge Base Tools (6)
-        types.Tool(
-            name="kb_add",
-            description="Add a knowledge base entry",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "Topic"},
-                    "title": {"type": "string", "description": "Entry title"},
-                    "content": {"type": "string", "description": "Entry content"},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags"},
-                    "author": {"type": "string", "description": "Who is creating this entry (your name, agent name, or system). Optional."},
-                    "source_type": {"type": "string", "description": "Origin: 'human', 'agent', or 'system'. Optional, defaults to null."}
+    # Knowledge Base Tools (6)
+    types.Tool(
+        name="kb_add",
+        description="Add a knowledge base entry",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Topic"},
+                "title": {"type": "string", "description": "Entry title"},
+                "content": {"type": "string", "description": "Entry content"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags"},
+                "author": {
+                    "type": "string",
+                    "description": "Who is creating this entry (your name, agent name, or system). Optional.",
                 },
-                "required": ["topic", "title", "content"]
-            }
-        ),
-        types.Tool(
-            name="kb_search",
-            description="Search knowledge base",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "topic": {"type": "string", "description": "Filter by topic"}
+                "source_type": {
+                    "type": "string",
+                    "description": "Origin: 'human', 'agent', or 'system'. Optional, defaults to null.",
                 },
-                "required": ["query"]
-            }
-        ),
-        types.Tool(
-            name="kb_get",
-            description="Get full KB entry by ID",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "kb_id": {"type": "string", "description": "KB entry ID"}
+            },
+            "required": ["topic", "title", "content"],
+        },
+    ),
+    types.Tool(
+        name="kb_search",
+        description="Search knowledge base",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "topic": {"type": "string", "description": "Filter by topic"},
+            },
+            "required": ["query"],
+        },
+    ),
+    types.Tool(
+        name="kb_get",
+        description="Get full KB entry by ID",
+        inputSchema={
+            "type": "object",
+            "properties": {"kb_id": {"type": "string", "description": "KB entry ID"}},
+            "required": ["kb_id"],
+        },
+    ),
+    types.Tool(
+        name="kb_list",
+        description="List KB entries",
+        inputSchema={
+            "type": "object",
+            "properties": {"topic": {"type": "string", "description": "Filter by topic"}},
+        },
+    ),
+    types.Tool(
+        name="kb_update",
+        description="Update existing KB entry content and metadata",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "entry_id": {"type": "string", "description": "UUID of entry to update"},
+                "content": {"type": "string", "description": "New content text"},
+                "metadata": {"type": "object", "description": "Updated metadata object"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Updated tags array",
                 },
-                "required": ["kb_id"]
-            }
-        ),
-        types.Tool(
-            name="kb_list",
-            description="List KB entries",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "Filter by topic"}
-                }
-            }
-        ),
-        types.Tool(
-            name="kb_update",
-            description="Update existing KB entry content and metadata",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "entry_id": {"type": "string", "description": "UUID of entry to update"},
-                    "content": {"type": "string", "description": "New content text"},
-                    "metadata": {"type": "object", "description": "Updated metadata object"},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Updated tags array"},
-                    "topic": {"type": "string", "description": "Updated topic/category for the entry"},
-                    "verified": {"type": ["boolean", "null"], "description": "Mark entry as human-verified (true), disputed (false), or reset to unreviewed (null)."}
+                "topic": {"type": "string", "description": "Updated topic/category for the entry"},
+                "verified": {
+                    "type": ["boolean", "null"],
+                    "description": "Mark entry as human-verified (true), disputed (false), or reset to unreviewed (null).",
                 },
-                "required": ["entry_id"]
-            }
-        ),
-        types.Tool(
-            name="kb_delete",
-            description="Delete existing KB entry from database",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "entry_id": {"type": "string", "description": "UUID of entry to delete"},
-                    "confirm": {"type": "boolean", "description": "Confirmation flag for safety", "default": False}
+            },
+            "required": ["entry_id"],
+        },
+    ),
+    types.Tool(
+        name="kb_delete",
+        description="Delete existing KB entry from database",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "entry_id": {"type": "string", "description": "UUID of entry to delete"},
+                "confirm": {
+                    "type": "boolean",
+                    "description": "Confirmation flag for safety",
+                    "default": False,
                 },
-                "required": ["entry_id"]
-            }
-        ),
-
-        # Investigations Tools (5)
-        types.Tool(
-            name="investigation_add",
-            description="Add an investigation entry (open or append to an ops investigation)",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string"},
-                    "title": {"type": "string"},
-                    "content": {"type": "string"},
-                    "tags": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["entry_id"],
+        },
+    ),
+    # Investigations Tools (5)
+    types.Tool(
+        name="investigation_add",
+        description="Add an investigation entry (open or append to an ops investigation)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["topic", "title", "content"],
+        },
+    ),
+    types.Tool(
+        name="investigation_list",
+        description="List investigations",
+        inputSchema={
+            "type": "object",
+            "properties": {"topic": {"type": "string", "description": "Filter by topic"}},
+        },
+    ),
+    types.Tool(
+        name="investigation_get",
+        description="Get a single investigation entry by ID",
+        inputSchema={
+            "type": "object",
+            "properties": {"note_id": {"type": "string"}},
+            "required": ["note_id"],
+        },
+    ),
+    types.Tool(
+        name="investigation_log_experiment",
+        description="Log a structured experiment within an investigation (hypothesis, methodology, results, conclusion)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "hypothesis": {"type": "string"},
+                "methodology": {"type": "string"},
+                "results": {"type": "object"},
+                "conclusion": {"type": "string"},
+            },
+            "required": ["title"],
+        },
+    ),
+    types.Tool(
+        name="investigation_list_experiments",
+        description="List logged investigation experiments",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    # Journal Tools (4)
+    types.Tool(
+        name="journal_append",
+        description="Append journal entry",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "entry_type": {
+                    "type": "string",
+                    "enum": ["daily", "milestone", "reflection", "idea"],
                 },
-                "required": ["topic", "title", "content"]
-            }
-        ),
-        types.Tool(
-            name="investigation_list",
-            description="List investigations",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "Filter by topic"}
-                }
-            }
-        ),
-        types.Tool(
-            name="investigation_get",
-            description="Get a single investigation entry by ID",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "note_id": {"type": "string"}
+                "content": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["entry_type", "content"],
+        },
+    ),
+    types.Tool(
+        name="journal_list",
+        description="List journal entries",
+        inputSchema={"type": "object", "properties": {"limit": {"type": "integer", "default": 20}}},
+    ),
+    types.Tool(
+        name="journal_get",
+        description="Get journal entry",
+        inputSchema={
+            "type": "object",
+            "properties": {"entry_id": {"type": "string"}},
+            "required": ["entry_id"],
+        },
+    ),
+    types.Tool(
+        name="snapshot_config",
+        description="Snapshot current config",
+        inputSchema={
+            "type": "object",
+            "properties": {"config_name": {"type": "string"}, "config_data": {"type": "object"}},
+            "required": ["config_name", "config_data"],
+        },
+    ),
+    # Document Ingestion Tools (4) - v1.3
+    types.Tool(
+        name="kb_ingest_doc",
+        description="Ingest single markdown file into KB with change detection",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "doc_path": {"type": "string", "description": "Absolute path to markdown file"},
+                "strategy": {
+                    "type": "string",
+                    "enum": ["full", "chunked", "summary"],
+                    "default": "chunked",
+                    "description": "Ingestion strategy: full (one entry), chunked (by sections), summary (GPT summary)",
                 },
-                "required": ["note_id"]
-            }
-        ),
-        types.Tool(
-            name="investigation_log_experiment",
-            description="Log a structured experiment within an investigation (hypothesis, methodology, results, conclusion)",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "hypothesis": {"type": "string"},
-                    "methodology": {"type": "string"},
-                    "results": {"type": "object"},
-                    "conclusion": {"type": "string"}
+                "chunk_size": {
+                    "type": "integer",
+                    "default": 2000,
+                    "description": "Max tokens per chunk (chunked strategy only)",
                 },
-                "required": ["title"]
-            }
-        ),
-        types.Tool(
-            name="investigation_list_experiments",
-            description="List logged investigation experiments",
-            inputSchema={"type": "object", "properties": {}}
-        ),
-
-        # Journal Tools (4)
-        types.Tool(
-            name="journal_append",
-            description="Append journal entry",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "entry_type": {"type": "string", "enum": ["daily", "milestone", "reflection", "idea"]},
-                    "content": {"type": "string"},
-                    "tags": {"type": "array", "items": {"type": "string"}}
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Additional tags",
                 },
-                "required": ["entry_type", "content"]
-            }
-        ),
-        types.Tool(
-            name="journal_list",
-            description="List journal entries",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "default": 20}
-                }
-            }
-        ),
-        types.Tool(
-            name="journal_get",
-            description="Get journal entry",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "entry_id": {"type": "string"}
+                "overwrite": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Replace existing KB entries from this doc",
                 },
-                "required": ["entry_id"]
-            }
-        ),
-        types.Tool(
-            name="snapshot_config",
-            description="Snapshot current config",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "config_name": {"type": "string"},
-                    "config_data": {"type": "object"}
+                "author": {
+                    "type": "string",
+                    "description": "Who is ingesting (optional, defaults to None)",
                 },
-                "required": ["config_name", "config_data"]
-            }
-        ),
-
-        # Document Ingestion Tools (4) - v1.3
-        types.Tool(
-            name="kb_ingest_doc",
-            description="Ingest single markdown file into KB with change detection",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "doc_path": {"type": "string", "description": "Absolute path to markdown file"},
-                    "strategy": {
-                        "type": "string",
-                        "enum": ["full", "chunked", "summary"],
-                        "default": "chunked",
-                        "description": "Ingestion strategy: full (one entry), chunked (by sections), summary (GPT summary)"
-                    },
-                    "chunk_size": {"type": "integer", "default": 2000, "description": "Max tokens per chunk (chunked strategy only)"},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Additional tags"},
-                    "overwrite": {"type": "boolean", "default": False, "description": "Replace existing KB entries from this doc"},
-                    "author": {"type": "string", "description": "Who is ingesting (optional, defaults to None)"},
-                    "source_type": {"type": "string", "default": "system", "description": "Source type for attribution (defaults to 'system' since ingestion is automated)"}
+                "source_type": {
+                    "type": "string",
+                    "default": "system",
+                    "description": "Source type for attribution (defaults to 'system' since ingestion is automated)",
                 },
-                "required": ["doc_path"]
-            }
-        ),
-        types.Tool(
-            name="kb_ingest_dir",
-            description="Batch ingest directory of markdown files",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "dir_path": {"type": "string", "description": "Directory to scan"},
-                    "pattern": {"type": "string", "default": "*.md", "description": "File pattern (e.g., *.md)"},
-                    "strategy": {"type": "string", "enum": ["full", "chunked", "summary"], "default": "chunked"},
-                    "recursive": {"type": "boolean", "default": True, "description": "Scan subdirectories"},
-                    "exclude_patterns": {"type": "array", "items": {"type": "string"}, "description": "Patterns to exclude"},
-                    "author": {"type": "string", "description": "Who is ingesting (optional, defaults to None)"},
-                    "source_type": {"type": "string", "default": "system", "description": "Source type for attribution (defaults to 'system' since ingestion is automated)"}
+            },
+            "required": ["doc_path"],
+        },
+    ),
+    types.Tool(
+        name="kb_ingest_dir",
+        description="Batch ingest directory of markdown files",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dir_path": {"type": "string", "description": "Directory to scan"},
+                "pattern": {
+                    "type": "string",
+                    "default": "*.md",
+                    "description": "File pattern (e.g., *.md)",
                 },
-                "required": ["dir_path"]
-            }
-        ),
-        types.Tool(
-            name="kb_sync_status",
-            description="Check sync state between source docs and KB",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "dir_path": {"type": "string", "description": "Directory to check"}
+                "strategy": {
+                    "type": "string",
+                    "enum": ["full", "chunked", "summary"],
+                    "default": "chunked",
                 },
-                "required": ["dir_path"]
-            }
-        ),
-        # MCP Index Tools (5)
-        types.Tool(
-            name="mcp_index_scan",
-            description="Scan all MCP servers and index their tools. By default, scans only configured servers (66% token savings).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "triggered_by": {"type": "string", "default": "manual", "description": "Source of scan (manual, cron, deployment)"},
-                    "config_filter": {"type": "boolean", "default": True, "description": "If true (default), scan only servers in ~/.claude.json. Set false to scan all servers."}
-                }
-            }
-        ),
-        types.Tool(
-            name="mcp_index_search",
-            description="Search for MCP tools by description/capability",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "category": {"type": "string", "description": "Optional category filter (search, storage, processing, etc.)"},
-                    "limit": {"type": "integer", "default": 20, "description": "Maximum results"}
+                "recursive": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Scan subdirectories",
                 },
-                "required": ["query"]
-            }
-        ),
-        types.Tool(
-            name="mcp_index_get_server",
-            description="Get all tools for a specific MCP server",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "server_id": {"type": "string", "description": "Server ID (e.g., 'knowledge-mcp')"}
+                "exclude_patterns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Patterns to exclude",
                 },
-                "required": ["server_id"]
-            }
-        ),
-        types.Tool(
-            name="mcp_index_get_tool",
-            description="Get detailed information about a specific tool",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tool_name": {"type": "string", "description": "Tool name (e.g., 'kb_search')"}
+                "author": {
+                    "type": "string",
+                    "description": "Who is ingesting (optional, defaults to None)",
                 },
-                "required": ["tool_name"]
-            }
-        ),
-        types.Tool(
-            name="mcp_index_rebuild",
-            description="Force rebuild of entire MCP index (same as mcp_index_scan)",
-            inputSchema={
-                "type": "object",
-                "properties": {}
-            }
-        ),
-
-        # ================================================================
-        # SEARCH TOOLS (consolidated from search-mcp)
-        # ================================================================
-        types.Tool(
-            name="search_local",
-            description="Search local files by content (lexical mode)",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "paths": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Paths to search (defaults: learning, xtts, knowledge)"
-                    },
-                    "file_types": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "File extensions to search (default: txt, json, md, py, yaml)"
-                    }
+                "source_type": {
+                    "type": "string",
+                    "default": "system",
+                    "description": "Source type for attribution (defaults to 'system' since ingestion is automated)",
                 },
-                "required": ["query"]
-            }
-        ),
-        types.Tool(
-            name="search_corpora",
-            description="Search across corpus manifests (JSONL files)",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "corpus_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Specific corpus IDs to search (optional)"
-                    }
+            },
+            "required": ["dir_path"],
+        },
+    ),
+    types.Tool(
+        name="kb_sync_status",
+        description="Check sync state between source docs and KB",
+        inputSchema={
+            "type": "object",
+            "properties": {"dir_path": {"type": "string", "description": "Directory to check"}},
+            "required": ["dir_path"],
+        },
+    ),
+    # MCP Index Tools (5)
+    types.Tool(
+        name="mcp_index_scan",
+        description="Scan all MCP servers and index their tools. By default, scans only configured servers (66% token savings).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "triggered_by": {
+                    "type": "string",
+                    "default": "manual",
+                    "description": "Source of scan (manual, cron, deployment)",
                 },
-                "required": ["query"]
-            }
-        ),
-        types.Tool(
-            name="search_transcripts",
-            description="Search transcript segments from Whisper outputs",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "speaker": {"type": "string", "description": "Filter by speaker (optional)"}
+                "config_filter": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "If true (default), scan only servers in ~/.claude.json. Set false to scan all servers.",
                 },
-                "required": ["query"]
-            }
-        ),
-        types.Tool(
-            name="multi_search",
-            description="Combined search across all sources (local, knowledge, corpora, transcripts)",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"}
+            },
+        },
+    ),
+    types.Tool(
+        name="mcp_index_search",
+        description="Search for MCP tools by description/capability",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "category": {
+                    "type": "string",
+                    "description": "Optional category filter (search, storage, processing, etc.)",
                 },
-                "required": ["query"]
-            }
-        ),
-        types.Tool(
-            name="deduplicate_results",
-            description="Remove duplicate search results based on text similarity",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "results": {
-                        "type": "array",
-                        "items": {"type": "object"},
-                        "description": "Array of search result objects"
-                    },
-                    "threshold": {
-                        "type": "number",
-                        "description": "Similarity threshold (0-1, default: 0.9)"
-                    }
+                "limit": {"type": "integer", "default": 20, "description": "Maximum results"},
+            },
+            "required": ["query"],
+        },
+    ),
+    types.Tool(
+        name="mcp_index_get_server",
+        description="Get all tools for a specific MCP server",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "server_id": {"type": "string", "description": "Server ID (e.g., 'knowledge-mcp')"}
+            },
+            "required": ["server_id"],
+        },
+    ),
+    types.Tool(
+        name="mcp_index_get_tool",
+        description="Get detailed information about a specific tool",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "tool_name": {"type": "string", "description": "Tool name (e.g., 'kb_search')"}
+            },
+            "required": ["tool_name"],
+        },
+    ),
+    types.Tool(
+        name="mcp_index_rebuild",
+        description="Force rebuild of entire MCP index (same as mcp_index_scan)",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    # ================================================================
+    # SEARCH TOOLS (consolidated from search-mcp)
+    # ================================================================
+    types.Tool(
+        name="search_local",
+        description="Search local files by content (lexical mode)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Paths to search (defaults: learning, xtts, knowledge)",
                 },
-                "required": ["results"]
-            }
-        ),
-        types.Tool(
-            name="cluster_results",
-            description="Cluster search results by topic/source type",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "results": {
-                        "type": "array",
-                        "items": {"type": "object"},
-                        "description": "Array of search result objects"
-                    },
-                    "num_clusters": {
-                        "type": "integer",
-                        "description": "Number of clusters (default: 5)"
-                    }
+                "file_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "File extensions to search (default: txt, json, md, py, yaml)",
                 },
-                "required": ["results"]
-            }
-        ),
+            },
+            "required": ["query"],
+        },
+    ),
+    types.Tool(
+        name="search_corpora",
+        description="Search across corpus manifests (JSONL files)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "corpus_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific corpus IDs to search (optional)",
+                },
+            },
+            "required": ["query"],
+        },
+    ),
+    types.Tool(
+        name="search_transcripts",
+        description="Search transcript segments from Whisper outputs",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "speaker": {"type": "string", "description": "Filter by speaker (optional)"},
+            },
+            "required": ["query"],
+        },
+    ),
+    types.Tool(
+        name="multi_search",
+        description="Combined search across all sources (local, knowledge, corpora, transcripts)",
+        inputSchema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "Search query"}},
+            "required": ["query"],
+        },
+    ),
+    types.Tool(
+        name="deduplicate_results",
+        description="Remove duplicate search results based on text similarity",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Array of search result objects",
+                },
+                "threshold": {
+                    "type": "number",
+                    "description": "Similarity threshold (0-1, default: 0.9)",
+                },
+            },
+            "required": ["results"],
+        },
+    ),
+    types.Tool(
+        name="cluster_results",
+        description="Cluster search results by topic/source type",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Array of search result objects",
+                },
+                "num_clusters": {
+                    "type": "integer",
+                    "description": "Number of clusters (default: 5)",
+                },
+            },
+            "required": ["results"],
+        },
+    ),
 ]
 
 
@@ -578,7 +626,7 @@ async def list_tools() -> list[types.Tool]:
 
 
 # Pre-built schema lookup table for O(1) access in call_tool().
-_TOOL_SCHEMA_MAP: Dict[str, dict] = {t.name: t.inputSchema for t in _TOOL_DEFINITIONS}
+_TOOL_SCHEMA_MAP: dict[str, dict] = {t.name: t.inputSchema for t in _TOOL_DEFINITIONS}
 
 
 def _get_tool_schema(name: str) -> dict:
@@ -603,7 +651,9 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
                 jsonschema.validate(instance=arguments, schema=schema)
             except jsonschema.ValidationError as exc:
                 return format_response(
-                    ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, f"Input validation error: {exc.message}")
+                    ResponseEnvelope.error(
+                        ErrorCodes.INVALID_INPUT, f"Input validation error: {exc.message}"
+                    )
                 )
 
         # KB Tools
@@ -689,8 +739,15 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
 # Knowledge Base Handlers
 # =============================================================================
 
-def handle_kb_add(topic: str, title: str, content: str, tags: list = None,
-                  author: str = None, source_type: str = None) -> dict:
+
+def handle_kb_add(
+    topic: str,
+    title: str,
+    content: str,
+    tags: list = None,
+    author: str = None,
+    source_type: str = None,
+) -> dict:
     """Add KB entry.
 
     Optional attribution fields (author, source_type) support multi-agent
@@ -713,7 +770,7 @@ def handle_kb_add(topic: str, title: str, content: str, tags: list = None,
 
         return ResponseEnvelope.success(
             f"Added KB entry: {title}",
-            {"kb_id": kb_id, "topic": topic, "author": author, "source_type": source_type}
+            {"kb_id": kb_id, "topic": topic, "author": author, "source_type": source_type},
         )
     except Exception as e:
         logger.error(f"Error adding KB entry: {e}")
@@ -729,8 +786,9 @@ def handle_kb_search(query: str, topic: str = None) -> dict:
         # This makes "Phase 2" search for "Phase & 2"
         tsquery_safe = _sanitize_search_query(query).replace(" ", " & ")
 
-        query_builder = db.table("knowledge.kb_entries")\
-            .select("kb_id, topic, title, tags, author, source_type, verified")
+        query_builder = db.table("knowledge.kb_entries").select(
+            "kb_id, topic, title, tags, author, source_type, verified"
+        )
 
         if topic:
             query_builder = query_builder.eq("topic", topic)
@@ -740,9 +798,7 @@ def handle_kb_search(query: str, topic: str = None) -> dict:
         # PostgREST will use the index automatically when we search on title or content
         try:
             # Try websearch FTS first (most flexible - handles phrases, AND/OR)
-            query_builder = query_builder.or_(
-                f"title.wfts.{safe_query},content.wfts.{safe_query}"
-            )
+            query_builder = query_builder.or_(f"title.wfts.{safe_query},content.wfts.{safe_query}")
         except Exception as fts_error:
             # Fallback to plain text FTS if websearch fails
             logger.warning(f"Websearch FTS failed, using plain FTS: {fts_error}")
@@ -754,7 +810,7 @@ def handle_kb_search(query: str, topic: str = None) -> dict:
 
         return ResponseEnvelope.success(
             f"Found {len(result.data)} KB entries",
-            {"results": result.data, "count": len(result.data)}
+            {"results": result.data, "count": len(result.data)},
         )
     except Exception as e:
         logger.error(f"Error searching KB: {e}")
@@ -764,19 +820,14 @@ def handle_kb_search(query: str, topic: str = None) -> dict:
 def handle_kb_get(kb_id: str) -> dict:
     """Get KB entry details."""
     try:
-        result = db.table("knowledge.kb_entries")\
-            .select("*")\
-            .eq("kb_id", kb_id)\
-            .maybe_single()\
-            .execute()
+        result = (
+            db.table("knowledge.kb_entries").select("*").eq("kb_id", kb_id).maybe_single().execute()
+        )
 
         if not result or not result.data:
             return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"KB entry not found: {kb_id}")
 
-        return ResponseEnvelope.success(
-            f"KB entry: {result.data['title']}",
-            result.data
-        )
+        return ResponseEnvelope.success(f"KB entry: {result.data['title']}", result.data)
     except Exception as e:
         logger.error(f"Error getting KB entry: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
@@ -785,9 +836,11 @@ def handle_kb_get(kb_id: str) -> dict:
 def handle_kb_list(topic: str = None) -> dict:
     """List KB entries."""
     try:
-        query = db.table("knowledge.kb_entries")\
-            .select("kb_id, topic, title, tags, author, source_type, verified, created_at")\
+        query = (
+            db.table("knowledge.kb_entries")
+            .select("kb_id, topic, title, tags, author, source_type, verified, created_at")
             .order("created_at", desc=True)
+        )
 
         if topic:
             query = query.eq("topic", topic)
@@ -796,7 +849,7 @@ def handle_kb_list(topic: str = None) -> dict:
 
         return ResponseEnvelope.success(
             f"Found {len(result.data)} KB entries",
-            {"entries": result.data, "count": len(result.data)}
+            {"entries": result.data, "count": len(result.data)},
         )
     except Exception as e:
         logger.error(f"Error listing KB entries: {e}")
@@ -806,8 +859,14 @@ def handle_kb_list(topic: str = None) -> dict:
 _VERIFIED_SENTINEL = object()
 
 
-def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, tags: list = None,
-                     topic: str = None, verified: Any = _VERIFIED_SENTINEL) -> dict:
+def handle_kb_update(
+    entry_id: str,
+    content: str = None,
+    metadata: dict = None,
+    tags: list = None,
+    topic: str = None,
+    verified: Any = _VERIFIED_SENTINEL,
+) -> dict:
     """Update existing KB entry with partial updates support.
 
     Updates only the provided fields, preserving existing fields not specified.
@@ -818,11 +877,13 @@ def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, 
     """
     try:
         # First, verify the entry exists
-        existing_result = db.table("knowledge.kb_entries")\
-            .select("*")\
-            .eq("kb_id", entry_id)\
-            .maybe_single()\
+        existing_result = (
+            db.table("knowledge.kb_entries")
+            .select("*")
+            .eq("kb_id", entry_id)
+            .maybe_single()
             .execute()
+        )
 
         if not existing_result or not existing_result.data:
             return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"KB entry not found: {entry_id}")
@@ -863,30 +924,25 @@ def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, 
         if set(update_data.keys()) == {"updated_at"}:
             return ResponseEnvelope.error(
                 ErrorCodes.INVALID_INPUT,
-                "No fields provided for update. Specify content, metadata, tags, topic, and/or verified."
+                "No fields provided for update. Specify content, metadata, tags, topic, and/or verified.",
             )
 
         # Perform the update
-        db.table("knowledge.kb_entries")\
-            .update(update_data)\
-            .eq("kb_id", entry_id)\
-            .execute()
+        db.table("knowledge.kb_entries").update(update_data).eq("kb_id", entry_id).execute()
 
         # Fetch and return the updated entry
-        updated_result = db.table("knowledge.kb_entries")\
-            .select("*")\
-            .eq("kb_id", entry_id)\
-            .maybe_single()\
+        updated_result = (
+            db.table("knowledge.kb_entries")
+            .select("*")
+            .eq("kb_id", entry_id)
+            .maybe_single()
             .execute()
+        )
 
         updated_fields = list(update_data.keys())
         return ResponseEnvelope.success(
             f"Updated KB entry '{existing_entry['title']}' (fields: {', '.join(updated_fields)})",
-            {
-                "kb_id": entry_id,
-                "updated_fields": updated_fields,
-                "entry": updated_result.data
-            }
+            {"kb_id": entry_id, "updated_fields": updated_fields, "entry": updated_result.data},
         )
 
     except Exception as e:
@@ -905,15 +961,17 @@ def handle_kb_delete(entry_id: str, confirm: bool = False) -> dict:
         if not confirm:
             return ResponseEnvelope.error(
                 ErrorCodes.INVALID_INPUT,
-                "Deletion requires explicit confirmation. Set confirm=True to proceed."
+                "Deletion requires explicit confirmation. Set confirm=True to proceed.",
             )
 
         # First, verify the entry exists and get its details for audit trail
-        existing_result = db.table("knowledge.kb_entries")\
-            .select("*")\
-            .eq("kb_id", entry_id)\
-            .maybe_single()\
+        existing_result = (
+            db.table("knowledge.kb_entries")
+            .select("*")
+            .eq("kb_id", entry_id)
+            .maybe_single()
             .execute()
+        )
 
         if not existing_result or not existing_result.data:
             return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"KB entry not found: {entry_id}")
@@ -922,20 +980,14 @@ def handle_kb_delete(entry_id: str, confirm: bool = False) -> dict:
         entry_title = deleted_entry.get("title", "Untitled")
 
         # Delete the entry
-        db.table("knowledge.kb_entries")\
-            .delete()\
-            .eq("kb_id", entry_id)\
-            .execute()
+        db.table("knowledge.kb_entries").delete().eq("kb_id", entry_id).execute()
 
         # Note: In a full implementation, you would also delete associated embeddings/vectors here
         # This is simplified for the basic CRUD operation.
 
         return ResponseEnvelope.success(
             f"Deleted KB entry '{entry_title}' ({entry_id})",
-            {
-                "kb_id": entry_id,
-                "deleted_entry": deleted_entry
-            }
+            {"kb_id": entry_id, "deleted_entry": deleted_entry},
         )
 
     except Exception as e:
@@ -949,6 +1001,7 @@ def handle_kb_delete(entry_id: str, confirm: bool = False) -> dict:
 # MCP tool/handler surface has been renamed to "investigation".)
 # =============================================================================
 
+
 def handle_investigation_add(topic: str, title: str, content: str, tags: list = None) -> dict:
     """Add an investigation entry."""
     try:
@@ -959,15 +1012,12 @@ def handle_investigation_add(topic: str, title: str, content: str, tags: list = 
             "topic": topic,
             "title": title,
             "content": content,
-            "tags": tags or []
+            "tags": tags or [],
         }
 
         db.table("knowledge.research_notes").insert(note).execute()
 
-        return ResponseEnvelope.success(
-            f"Added investigation entry: {title}",
-            {"note_id": note_id}
-        )
+        return ResponseEnvelope.success(f"Added investigation entry: {title}", {"note_id": note_id})
     except Exception as e:
         logger.error(f"Error adding investigation entry: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
@@ -976,9 +1026,11 @@ def handle_investigation_add(topic: str, title: str, content: str, tags: list = 
 def handle_investigation_list(topic: str = None) -> dict:
     """List investigations."""
     try:
-        query = db.table("knowledge.research_notes")\
-            .select("note_id, topic, title, tags, created_at")\
+        query = (
+            db.table("knowledge.research_notes")
+            .select("note_id, topic, title, tags, created_at")
             .order("created_at", desc=True)
+        )
 
         if topic:
             query = query.eq("topic", topic)
@@ -987,7 +1039,7 @@ def handle_investigation_list(topic: str = None) -> dict:
 
         return ResponseEnvelope.success(
             f"Found {len(result.data)} investigations",
-            {"investigations": result.data, "count": len(result.data)}
+            {"investigations": result.data, "count": len(result.data)},
         )
     except Exception as e:
         logger.error(f"Error listing investigations: {e}")
@@ -997,27 +1049,32 @@ def handle_investigation_list(topic: str = None) -> dict:
 def handle_investigation_get(note_id: str) -> dict:
     """Get a single investigation entry."""
     try:
-        result = db.table("knowledge.research_notes")\
-            .select("*")\
-            .eq("note_id", note_id)\
-            .maybe_single()\
+        result = (
+            db.table("knowledge.research_notes")
+            .select("*")
+            .eq("note_id", note_id)
+            .maybe_single()
             .execute()
+        )
 
         if not result or not result.data:
-            return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"Investigation not found: {note_id}")
+            return ResponseEnvelope.error(
+                ErrorCodes.NOT_FOUND, f"Investigation not found: {note_id}"
+            )
 
-        return ResponseEnvelope.success(
-            f"Investigation: {result.data['title']}",
-            result.data
-        )
+        return ResponseEnvelope.success(f"Investigation: {result.data['title']}", result.data)
     except Exception as e:
         logger.error(f"Error getting investigation: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_investigation_log_experiment(title: str, hypothesis: str = None,
-                                        methodology: str = None, results: dict = None,
-                                        conclusion: str = None) -> dict:
+def handle_investigation_log_experiment(
+    title: str,
+    hypothesis: str = None,
+    methodology: str = None,
+    results: dict = None,
+    conclusion: str = None,
+) -> dict:
     """Log an experiment within an investigation."""
     try:
         experiment_id = f"exp_{uuid.uuid4().hex[:12]}"
@@ -1028,14 +1085,13 @@ def handle_investigation_log_experiment(title: str, hypothesis: str = None,
             "hypothesis": hypothesis,
             "methodology": methodology,
             "results": results or {},
-            "conclusion": conclusion
+            "conclusion": conclusion,
         }
 
         db.table("knowledge.research_experiments").insert(experiment).execute()
 
         return ResponseEnvelope.success(
-            f"Logged investigation experiment: {title}",
-            {"experiment_id": experiment_id}
+            f"Logged investigation experiment: {title}", {"experiment_id": experiment_id}
         )
     except Exception as e:
         logger.error(f"Error logging investigation experiment: {e}")
@@ -1045,15 +1101,17 @@ def handle_investigation_log_experiment(title: str, hypothesis: str = None,
 def handle_investigation_list_experiments() -> dict:
     """List investigation experiments."""
     try:
-        result = db.table("knowledge.research_experiments")\
-            .select("experiment_id, title, created_at")\
-            .order("created_at", desc=True)\
-            .limit(100)\
+        result = (
+            db.table("knowledge.research_experiments")
+            .select("experiment_id, title, created_at")
+            .order("created_at", desc=True)
+            .limit(100)
             .execute()
+        )
 
         return ResponseEnvelope.success(
             f"Found {len(result.data)} investigation experiments",
-            {"experiments": result.data, "count": len(result.data)}
+            {"experiments": result.data, "count": len(result.data)},
         )
     except Exception as e:
         logger.error(f"Error listing investigation experiments: {e}")
@@ -1063,6 +1121,7 @@ def handle_investigation_list_experiments() -> dict:
 # =============================================================================
 # Journal Handlers
 # =============================================================================
+
 
 def handle_journal_append(entry_type: str, content: str, tags: list = None) -> dict:
     """Append journal entry."""
@@ -1074,14 +1133,13 @@ def handle_journal_append(entry_type: str, content: str, tags: list = None) -> d
             "date": date.today().isoformat(),
             "entry_type": entry_type,
             "content": content,
-            "tags": tags or []
+            "tags": tags or [],
         }
 
         db.table("knowledge.journal_entries").insert(entry).execute()
 
         return ResponseEnvelope.success(
-            f"Added journal entry ({entry_type})",
-            {"entry_id": entry_id, "date": entry["date"]}
+            f"Added journal entry ({entry_type})", {"entry_id": entry_id, "date": entry["date"]}
         )
     except Exception as e:
         logger.error(f"Error appending journal: {e}")
@@ -1091,16 +1149,18 @@ def handle_journal_append(entry_type: str, content: str, tags: list = None) -> d
 def handle_journal_list(limit: int = 20) -> dict:
     """List journal entries."""
     try:
-        result = db.table("knowledge.journal_entries")\
-            .select("entry_id, date, entry_type, tags")\
-            .order("date", desc=True)\
-            .order("created_at", desc=True)\
-            .limit(limit)\
+        result = (
+            db.table("knowledge.journal_entries")
+            .select("entry_id, date, entry_type, tags")
+            .order("date", desc=True)
+            .order("created_at", desc=True)
+            .limit(limit)
             .execute()
+        )
 
         return ResponseEnvelope.success(
             f"Found {len(result.data)} journal entries",
-            {"entries": result.data, "count": len(result.data)}
+            {"entries": result.data, "count": len(result.data)},
         )
     except Exception as e:
         logger.error(f"Error listing journal: {e}")
@@ -1110,19 +1170,20 @@ def handle_journal_list(limit: int = 20) -> dict:
 def handle_journal_get(entry_id: str) -> dict:
     """Get journal entry."""
     try:
-        result = db.table("knowledge.journal_entries")\
-            .select("*")\
-            .eq("entry_id", entry_id)\
-            .maybe_single()\
+        result = (
+            db.table("knowledge.journal_entries")
+            .select("*")
+            .eq("entry_id", entry_id)
+            .maybe_single()
             .execute()
+        )
 
         if not result or not result.data:
-            return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"Journal entry not found: {entry_id}")
+            return ResponseEnvelope.error(
+                ErrorCodes.NOT_FOUND, f"Journal entry not found: {entry_id}"
+            )
 
-        return ResponseEnvelope.success(
-            f"Journal entry from {result.data['date']}",
-            result.data
-        )
+        return ResponseEnvelope.success(f"Journal entry from {result.data['date']}", result.data)
     except Exception as e:
         logger.error(f"Error getting journal entry: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
@@ -1140,14 +1201,13 @@ def handle_snapshot_config(config_name: str, config_data: dict) -> dict:
             "date": date.today().isoformat(),
             "entry_type": "milestone",
             "content": content,
-            "tags": ["config-snapshot", config_name]
+            "tags": ["config-snapshot", config_name],
         }
 
         db.table("knowledge.journal_entries").insert(entry).execute()
 
         return ResponseEnvelope.success(
-            f"Snapshotted config: {config_name}",
-            {"entry_id": entry_id}
+            f"Snapshotted config: {config_name}", {"entry_id": entry_id}
         )
     except Exception as e:
         logger.error(f"Error snapshotting config: {e}")
@@ -1158,9 +1218,16 @@ def handle_snapshot_config(config_name: str, config_data: dict) -> dict:
 # Document Ingestion Handlers (v1.3)
 # =============================================================================
 
-def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: int = 2000,
-                         tags: List[str] = None, overwrite: bool = False,
-                         author: str = None, source_type: str = "system") -> dict:
+
+def handle_kb_ingest_doc(
+    doc_path: str,
+    strategy: str = "chunked",
+    chunk_size: int = 2000,
+    tags: list[str] = None,
+    overwrite: bool = False,
+    author: str = None,
+    source_type: str = "system",
+) -> dict:
     """Ingest single markdown document into KB."""
     try:
         doc_path = Path(doc_path).resolve()
@@ -1175,39 +1242,43 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
         doc_hash = processor.compute_hash(content)
 
         # Check if document already synced
-        existing_sync = db.table("knowledge.kb_doc_sync")\
-            .select("*")\
-            .eq("doc_path", str(doc_path))\
-            .maybe_single()\
+        existing_sync = (
+            db.table("knowledge.kb_doc_sync")
+            .select("*")
+            .eq("doc_path", str(doc_path))
+            .maybe_single()
             .execute()
+        )
 
-        if existing_sync and existing_sync.data and existing_sync.data.get('doc_hash') == doc_hash and not overwrite:
+        if (
+            existing_sync
+            and existing_sync.data
+            and existing_sync.data.get("doc_hash") == doc_hash
+            and not overwrite
+        ):
             return ResponseEnvelope.success(
                 f"Document unchanged: {doc_path.name}",
                 {
                     "doc_path": str(doc_path),
                     "status": "unchanged",
                     "doc_hash": doc_hash,
-                    "kb_ids": existing_sync.data.get('kb_ids', [])
-                }
+                    "kb_ids": existing_sync.data.get("kb_ids", []),
+                },
             )
 
         # Delete old KB entries if overwriting
         if overwrite and existing_sync and existing_sync.data:
-            old_kb_ids = existing_sync.data.get('kb_ids', [])
+            old_kb_ids = existing_sync.data.get("kb_ids", [])
             if old_kb_ids:
-                db.table("knowledge.kb_entries")\
-                    .delete()\
-                    .in_("kb_id", old_kb_ids)\
-                    .execute()
+                db.table("knowledge.kb_entries").delete().in_("kb_id", old_kb_ids).execute()
                 logger.info(f"Deleted {len(old_kb_ids)} old KB entries for {doc_path.name}")
 
         # Extract topic and title
-        topic = metadata.get('topic') or processor.extract_topic_from_path(str(doc_path))
+        topic = metadata.get("topic") or processor.extract_topic_from_path(str(doc_path))
         base_title = processor.generate_title(content, str(doc_path))
         doc_tags = tags or []
-        if 'tags' in metadata:
-            doc_tags.extend(metadata['tags'])
+        if "tags" in metadata:
+            doc_tags.extend(metadata["tags"])
 
         # Ingest based on strategy
         kb_ids = []
@@ -1223,7 +1294,7 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
                 "tags": doc_tags,
                 "source_doc": str(doc_path),
                 "source_section": None,
-                "line_range": [1, len(content.split('\n'))],
+                "line_range": [1, len(content.split("\n"))],
                 "author": author,
                 "source_type": source_type,
             }
@@ -1235,7 +1306,11 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
             chunks = processor.chunk_by_sections(content, chunk_size)
             for i, chunk in enumerate(chunks):
                 kb_id = f"kb_{uuid.uuid4().hex[:12]}"
-                title = f"{base_title} - {chunk.section}" if chunk.section else f"{base_title} (part {i+1})"
+                title = (
+                    f"{base_title} - {chunk.section}"
+                    if chunk.section
+                    else f"{base_title} (part {i + 1})"
+                )
                 entry = {
                     "kb_id": kb_id,
                     "topic": topic,
@@ -1255,7 +1330,7 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
             # TODO: Implement GPT summary strategy
             return ResponseEnvelope.error(
                 ErrorCodes.INVALID_ARGUMENT,
-                "Summary strategy not yet implemented. Use 'full' or 'chunked'."
+                "Summary strategy not yet implemented. Use 'full' or 'chunked'.",
             )
 
         # Update sync tracking
@@ -1266,14 +1341,13 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
             "last_synced_at": datetime.utcnow().isoformat(),
             "last_modified_at": datetime.fromtimestamp(doc_path.stat().st_mtime).isoformat(),
             "strategy": strategy,
-            "metadata": metadata
+            "metadata": metadata,
         }
 
         if existing_sync and existing_sync.data:
-            db.table("knowledge.kb_doc_sync")\
-                .update(sync_data)\
-                .eq("doc_path", str(doc_path))\
-                .execute()
+            db.table("knowledge.kb_doc_sync").update(sync_data).eq(
+                "doc_path", str(doc_path)
+            ).execute()
             status = "updated"
         else:
             db.table("knowledge.kb_doc_sync").insert(sync_data).execute()
@@ -1286,8 +1360,8 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
                 "kb_entries_created": len(kb_ids),
                 "kb_ids": kb_ids,
                 "doc_hash": doc_hash,
-                "status": status
-            }
+                "status": status,
+            },
         )
 
     except Exception as e:
@@ -1295,11 +1369,18 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: str = "chunked",
-                         recursive: bool = True, exclude_patterns: List[str] = None,
-                         author: str = None, source_type: str = "system") -> dict:
+async def handle_kb_ingest_dir(
+    dir_path: str,
+    pattern: str = "*.md",
+    strategy: str = "chunked",
+    recursive: bool = True,
+    exclude_patterns: list[str] = None,
+    author: str = None,
+    source_type: str = "system",
+) -> dict:
     """Batch ingest directory (5x faster with async/await)."""
     import asyncio
+
     USE_ASYNC_INGESTION = os.getenv("ENABLE_ASYNC_INGESTION", "true").lower() == "true"
 
     try:
@@ -1316,12 +1397,17 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
         # Apply exclude patterns
         if exclude_patterns:
             import fnmatch
-            files = [f for f in files if not any(fnmatch.fnmatch(str(f), pat) for pat in exclude_patterns)]
+
+            files = [
+                f
+                for f in files
+                if not any(fnmatch.fnmatch(str(f), pat) for pat in exclude_patterns)
+            ]
 
         if not files:
             return ResponseEnvelope.success(
                 f"No files found matching pattern: {pattern}",
-                {"processed": 0, "created": 0, "updated": 0, "unchanged": 0, "errors": []}
+                {"processed": 0, "created": 0, "updated": 0, "unchanged": 0, "errors": []},
             )
 
         created = 0
@@ -1337,7 +1423,7 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
                 """Async file ingestion with aiofiles."""
                 try:
                     # Async file I/O
-                    async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
+                    async with aiofiles.open(filepath, encoding="utf-8") as f:
                         content = await f.read()
 
                     # Extract frontmatter and hash
@@ -1346,13 +1432,19 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
                     doc_hash = processor.compute_hash(content)
 
                     # Check if document already synced
-                    existing_sync = db.table("knowledge.kb_doc_sync")\
-                        .select("*")\
-                        .eq("doc_path", str(filepath))\
-                        .maybe_single()\
+                    existing_sync = (
+                        db.table("knowledge.kb_doc_sync")
+                        .select("*")
+                        .eq("doc_path", str(filepath))
+                        .maybe_single()
                         .execute()
+                    )
 
-                    if existing_sync and existing_sync.data and existing_sync.data.get('doc_hash') == doc_hash:
+                    if (
+                        existing_sync
+                        and existing_sync.data
+                        and existing_sync.data.get("doc_hash") == doc_hash
+                    ):
                         return {"status": "unchanged", "doc_path": str(filepath)}
 
                     # Ingest document (synchronous DB calls - Supabase client isn't async)
@@ -1367,20 +1459,17 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
                     )
 
                     return {
-                        "status": result.get('data', {}).get('status', 'unknown'),
+                        "status": result.get("data", {}).get("status", "unknown"),
                         "doc_path": str(filepath),
-                        "result": result
+                        "result": result,
                     }
 
                 except Exception as e:
-                    return {
-                        "status": "error",
-                        "doc_path": str(filepath),
-                        "error": str(e)
-                    }
+                    return {"status": "error", "doc_path": str(filepath), "error": str(e)}
 
             # Process files concurrently with asyncio.gather
             import time
+
             start = time.perf_counter()
 
             results = await asyncio.gather(*[ingest_file_async(f) for f in files])
@@ -1398,11 +1487,13 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
                 elif status == "unchanged":
                     unchanged += 1
                 elif status == "error":
-                    errors.append({
-                        "doc_path": res.get("doc_path"),
-                        "error": "ingestion_error",
-                        "message": res.get("error")
-                    })
+                    errors.append(
+                        {
+                            "doc_path": res.get("doc_path"),
+                            "error": "ingestion_error",
+                            "message": res.get("error"),
+                        }
+                    )
         else:
             # OLD: ThreadPoolExecutor (fallback for testing)
             with ThreadPoolExecutor(max_workers=4) as executor:
@@ -1424,26 +1515,30 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
                     file_path = future_to_file[future]
                     try:
                         result = future.result()
-                        if result.get('ok'):
-                            status = result.get('data', {}).get('status')
-                            if status == 'created':
+                        if result.get("ok"):
+                            status = result.get("data", {}).get("status")
+                            if status == "created":
                                 created += 1
-                            elif status == 'updated':
+                            elif status == "updated":
                                 updated += 1
-                            elif status == 'unchanged':
+                            elif status == "unchanged":
                                 unchanged += 1
                         else:
-                            errors.append({
-                                "doc_path": str(file_path),
-                                "error": result.get('error'),
-                                "message": result.get('message')
-                            })
+                            errors.append(
+                                {
+                                    "doc_path": str(file_path),
+                                    "error": result.get("error"),
+                                    "message": result.get("message"),
+                                }
+                            )
                     except Exception as e:
-                        errors.append({
-                            "doc_path": str(file_path),
-                            "error": "unexpected_exception",
-                            "message": str(e)
-                        })
+                        errors.append(
+                            {
+                                "doc_path": str(file_path),
+                                "error": "unexpected_exception",
+                                "message": str(e),
+                            }
+                        )
 
         return ResponseEnvelope.success(
             f"Processed {len(files)} files: {created} created, {updated} updated, {unchanged} unchanged",
@@ -1452,8 +1547,8 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
                 "created": created,
                 "updated": updated,
                 "unchanged": unchanged,
-                "errors": errors
-            }
+                "errors": errors,
+            },
         )
 
     except Exception as e:
@@ -1473,11 +1568,9 @@ def handle_kb_sync_status(dir_path: str) -> dict:
         md_paths = {str(f.resolve()): f for f in md_files}
 
         # Get all sync records
-        sync_records = db.table("knowledge.kb_doc_sync")\
-            .select("*")\
-            .execute()
+        sync_records = db.table("knowledge.kb_doc_sync").select("*").execute()
 
-        synced_paths = {r['doc_path']: r for r in sync_records.data}
+        synced_paths = {r["doc_path"]: r for r in sync_records.data}
 
         # Classify files
         synced = 0
@@ -1489,7 +1582,9 @@ def handle_kb_sync_status(dir_path: str) -> dict:
             if path_str in synced_paths:
                 sync_rec = synced_paths[path_str]
                 file_mtime = datetime.fromtimestamp(path_obj.stat().st_mtime)
-                last_synced = datetime.fromisoformat(sync_rec['last_modified_at'].replace('Z', '+00:00'))
+                last_synced = datetime.fromisoformat(
+                    sync_rec["last_modified_at"].replace("Z", "+00:00")
+                )
 
                 if file_mtime > last_synced:
                     modified += 1
@@ -1498,28 +1593,34 @@ def handle_kb_sync_status(dir_path: str) -> dict:
                     synced += 1
                     status = "synced"
 
-                details.append({
-                    "doc_path": path_str,
-                    "status": status,
-                    "last_synced": sync_rec['last_synced_at'],
-                    "doc_modified": file_mtime.isoformat(),
-                    "kb_ids": sync_rec['kb_ids']
-                })
+                details.append(
+                    {
+                        "doc_path": path_str,
+                        "status": status,
+                        "last_synced": sync_rec["last_synced_at"],
+                        "doc_modified": file_mtime.isoformat(),
+                        "kb_ids": sync_rec["kb_ids"],
+                    }
+                )
             else:
                 new += 1
-                details.append({
-                    "doc_path": path_str,
-                    "status": "new",
-                    "last_synced": None,
-                    "doc_modified": datetime.fromtimestamp(path_obj.stat().st_mtime).isoformat(),
-                    "kb_ids": []
-                })
+                details.append(
+                    {
+                        "doc_path": path_str,
+                        "status": "new",
+                        "last_synced": None,
+                        "doc_modified": datetime.fromtimestamp(
+                            path_obj.stat().st_mtime
+                        ).isoformat(),
+                        "kb_ids": [],
+                    }
+                )
 
         # Find orphaned KB entries (source doc deleted)
         orphaned_kb_ids = []
         for sync_path, sync_rec in synced_paths.items():
             if sync_path not in md_paths:
-                orphaned_kb_ids.extend(sync_rec['kb_ids'])
+                orphaned_kb_ids.extend(sync_rec["kb_ids"])
 
         return ResponseEnvelope.success(
             f"Sync status: {synced} synced, {modified} modified, {new} new, {len(orphaned_kb_ids)} orphaned",
@@ -1529,8 +1630,8 @@ def handle_kb_sync_status(dir_path: str) -> dict:
                 "modified": modified,
                 "new": new,
                 "orphaned_kb_entries": len(orphaned_kb_ids),
-                "details": details
-            }
+                "details": details,
+            },
         )
 
     except Exception as e:
@@ -1542,6 +1643,7 @@ def handle_kb_sync_status(dir_path: str) -> dict:
 # MCP Index Handlers
 # =============================================================================
 
+
 def handle_mcp_index_scan(triggered_by: str = "manual", config_filter: bool = True) -> dict:
     """Scan all MCP servers and index their tools."""
     try:
@@ -1550,7 +1652,7 @@ def handle_mcp_index_scan(triggered_by: str = "manual", config_filter: bool = Tr
 
         return ResponseEnvelope.success(
             f"Scanned {result['servers_scanned']} servers, indexed {result['tools_indexed']} tools",
-            result
+            result,
         )
 
     except Exception as e:
@@ -1569,26 +1671,36 @@ def handle_mcp_index_search(query: str, category: str = None, limit: int = 20) -
         if len(results) == 0:
             # Query last scan time from mcp_index_versions
             try:
-                last_scan_result = db.table("mcp_index_versions")\
-                    .select("scan_time")\
-                    .order("scan_time", desc=True)\
-                    .limit(1)\
+                last_scan_result = (
+                    db.table("mcp_index_versions")
+                    .select("scan_time")
+                    .order("scan_time", desc=True)
+                    .limit(1)
                     .execute()
+                )
 
                 if last_scan_result.data and len(last_scan_result.data) > 0:
-                    last_scan_time = datetime.fromisoformat(last_scan_result.data[0]["scan_time"].replace("Z", "+00:00"))
-                    time_since_scan = (datetime.now(last_scan_time.tzinfo) - last_scan_time).total_seconds()
+                    last_scan_time = datetime.fromisoformat(
+                        last_scan_result.data[0]["scan_time"].replace("Z", "+00:00")
+                    )
+                    time_since_scan = (
+                        datetime.now(last_scan_time.tzinfo) - last_scan_time
+                    ).total_seconds()
 
                     # If stale (>1 hour = 3600 seconds), trigger background re-index
                     if time_since_scan > 3600:
-                        logger.info(f"MCP Index stale ({time_since_scan/3600:.1f}h old), triggering background re-index")
+                        logger.info(
+                            f"MCP Index stale ({time_since_scan / 3600:.1f}h old), triggering background re-index"
+                        )
 
                         # Launch background re-index using threading
                         def background_reindex():
                             try:
                                 scanner_bg = MCPIndexScanner(db)
                                 result = scanner_bg.scan_all_servers(triggered_by="auto_watchdog")
-                                logger.info(f"Auto re-index complete: {result['servers_scanned']} servers, {result['tools_indexed']} tools")
+                                logger.info(
+                                    f"Auto re-index complete: {result['servers_scanned']} servers, {result['tools_indexed']} tools"
+                                )
                             except Exception as e:
                                 logger.error(f"Background re-index failed: {e}", exc_info=True)
 
@@ -1597,13 +1709,19 @@ def handle_mcp_index_search(query: str, category: str = None, limit: int = 20) -
                         re_index_triggered = True
                 else:
                     # No scan history found, trigger initial scan
-                    logger.info("No MCP Index scan history found, triggering initial background scan")
+                    logger.info(
+                        "No MCP Index scan history found, triggering initial background scan"
+                    )
 
                     def background_reindex():
                         try:
                             scanner_bg = MCPIndexScanner(db)
-                            result = scanner_bg.scan_all_servers(triggered_by="auto_watchdog_initial")
-                            logger.info(f"Initial auto scan complete: {result['servers_scanned']} servers, {result['tools_indexed']} tools")
+                            result = scanner_bg.scan_all_servers(
+                                triggered_by="auto_watchdog_initial"
+                            )
+                            logger.info(
+                                f"Initial auto scan complete: {result['servers_scanned']} servers, {result['tools_indexed']} tools"
+                            )
                         except Exception as e:
                             logger.error(f"Background initial scan failed: {e}", exc_info=True)
 
@@ -1619,7 +1737,7 @@ def handle_mcp_index_search(query: str, category: str = None, limit: int = 20) -
             "results": results,
             "query": query,
             "category": category,
-            "re_index_triggered": re_index_triggered
+            "re_index_triggered": re_index_triggered,
         }
 
         message = f"Found {len(results)} tools matching '{query}'"
@@ -1646,8 +1764,7 @@ def handle_mcp_index_get_server(server_id: str) -> dict:
         tools = result["tools"]
 
         return ResponseEnvelope.success(
-            f"Server {server_id} has {len(tools)} tools",
-            {"server": server, "tools": tools}
+            f"Server {server_id} has {len(tools)} tools", {"server": server, "tools": tools}
         )
 
     except Exception as e:
@@ -1664,10 +1781,7 @@ def handle_mcp_index_get_tool(tool_name: str) -> dict:
         if not tool:
             return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"Tool not found: {tool_name}")
 
-        return ResponseEnvelope.success(
-            f"Found tool: {tool['full_name']}",
-            {"tool": tool}
-        )
+        return ResponseEnvelope.success(f"Found tool: {tool['full_name']}", {"tool": tool})
 
     except Exception as e:
         logger.error(f"Error getting tool details: {e}", exc_info=True)
@@ -1682,7 +1796,7 @@ def handle_mcp_index_rebuild() -> dict:
 
         return ResponseEnvelope.success(
             f"Rebuilt index: {result['servers_scanned']} servers, {result['tools_indexed']} tools",
-            result
+            result,
         )
 
     except Exception as e:
@@ -1694,10 +1808,11 @@ def handle_mcp_index_rebuild() -> dict:
 # Search Handlers (consolidated from search-mcp)
 # =============================================================================
 
-def search_file_content(file_path: Path, query: str) -> Optional[Dict]:
+
+def search_file_content(file_path: Path, query: str) -> dict | None:
     """Search a single file for query string."""
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(file_path, encoding="utf-8", errors="ignore") as f:
             content = f.read()
             if query.lower() in content.lower():
                 # Find context around match
@@ -1710,23 +1825,19 @@ def search_file_content(file_path: Path, query: str) -> Optional[Dict]:
                     "file": str(file_path),
                     "match_count": content.lower().count(query.lower()),
                     "snippet": snippet,
-                    "file_size": file_path.stat().st_size
+                    "file_size": file_path.stat().st_size,
                 }
     except Exception as e:
         logger.warning(f"Error searching {file_path}: {e}")
     return None
 
 
-def handle_search_local(query: str, paths: List[str] = None, file_types: List[str] = None) -> dict:
+def handle_search_local(query: str, paths: list[str] = None, file_types: list[str] = None) -> dict:
     """Search local files by content."""
     try:
         # Default paths
         if not paths:
-            paths = [
-                str(LATVIAN_LEARNING_ROOT),
-                str(LATVIAN_XTTS_ROOT),
-                str(KNOWLEDGE_DATA_DIR)
-            ]
+            paths = [str(LATVIAN_LEARNING_ROOT), str(LATVIAN_XTTS_ROOT), str(KNOWLEDGE_DATA_DIR)]
 
         # Default file types
         if not file_types:
@@ -1758,15 +1869,15 @@ def handle_search_local(query: str, paths: List[str] = None, file_types: List[st
             {
                 "results": results[:50],  # Return top 50
                 "total_matches": len(results),
-                "files_searched": file_count
-            }
+                "files_searched": file_count,
+            },
         )
     except Exception as e:
         logger.error(f"Error in handle_search_local: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_search_corpora(query: str, corpus_ids: List[str] = None) -> dict:
+def handle_search_corpora(query: str, corpus_ids: list[str] = None) -> dict:
     """Search across corpus manifests."""
     try:
         results = []
@@ -1775,7 +1886,7 @@ def handle_search_corpora(query: str, corpus_ids: List[str] = None) -> dict:
         if not corpora_dir.exists():
             return ResponseEnvelope.success(
                 "Corpora directory not found (expected until data ingested)",
-                {"results": [], "count": 0}
+                {"results": [], "count": 0},
             )
 
         # Search corpus manifest files
@@ -1784,20 +1895,24 @@ def handle_search_corpora(query: str, corpus_ids: List[str] = None) -> dict:
             if corpus_ids and manifest_file.stem not in corpus_ids:
                 continue
 
-            with open(manifest_file, 'r') as f:
+            with open(manifest_file) as f:
                 for line_num, line in enumerate(f, 1):
                     try:
                         entry = json.loads(line)
                         # Search in transcript and metadata
-                        if (query.lower() in entry.get("text", "").lower() or
-                            query.lower() in json.dumps(entry.get("metadata", {})).lower()):
-                            results.append({
-                                "corpus": manifest_file.stem,
-                                "line": line_num,
-                                "segment_id": entry.get("segment_id", "unknown"),
-                                "text": entry.get("text", "")[:200],
-                                "metadata": entry.get("metadata", {})
-                            })
+                        if (
+                            query.lower() in entry.get("text", "").lower()
+                            or query.lower() in json.dumps(entry.get("metadata", {})).lower()
+                        ):
+                            results.append(
+                                {
+                                    "corpus": manifest_file.stem,
+                                    "line": line_num,
+                                    "segment_id": entry.get("segment_id", "unknown"),
+                                    "text": entry.get("text", "")[:200],
+                                    "metadata": entry.get("metadata", {}),
+                                }
+                            )
 
                             if len(results) >= 100:
                                 break
@@ -1809,7 +1924,7 @@ def handle_search_corpora(query: str, corpus_ids: List[str] = None) -> dict:
 
         return ResponseEnvelope.success(
             f"Found {len(results)} matches in corpora",
-            {"results": results[:50], "total_matches": len(results)}
+            {"results": results[:50], "total_matches": len(results)},
         )
     except Exception as e:
         logger.error(f"Error in handle_search_corpora: {e}")
@@ -1825,7 +1940,7 @@ def handle_search_transcripts(query: str, speaker: str = None) -> dict:
         search_dirs = [
             LATVIAN_XTTS_ROOT / "whisper_extracted",
             LATVIAN_XTTS_ROOT / "whisper_extracted_enhanced",
-            LATVIAN_XTTS_ROOT / "whisper_extracted_normalized"
+            LATVIAN_XTTS_ROOT / "whisper_extracted_normalized",
         ]
 
         for search_dir in search_dirs:
@@ -1844,17 +1959,19 @@ def handle_search_transcripts(query: str, speaker: str = None) -> dict:
                         # Search in text
                         text = data.get("text", "")
                         if query.lower() in text.lower():
-                            results.append({
-                                "file": str(json_file.relative_to(LATVIAN_XTTS_ROOT)),
-                                "speaker": data.get("speaker", "unknown"),
-                                "text": text[:200],
-                                "duration": data.get("duration_seconds"),
-                                "timestamp": data.get("start_time")
-                            })
+                            results.append(
+                                {
+                                    "file": str(json_file.relative_to(LATVIAN_XTTS_ROOT)),
+                                    "speaker": data.get("speaker", "unknown"),
+                                    "text": text[:200],
+                                    "duration": data.get("duration_seconds"),
+                                    "timestamp": data.get("start_time"),
+                                }
+                            )
 
                             if len(results) >= 100:
                                 break
-                except (json.JSONDecodeError, IOError):
+                except (OSError, json.JSONDecodeError):
                     continue
 
             if len(results) >= 100:
@@ -1862,7 +1979,7 @@ def handle_search_transcripts(query: str, speaker: str = None) -> dict:
 
         return ResponseEnvelope.success(
             f"Found {len(results)} transcript matches",
-            {"results": results[:50], "total_matches": len(results)}
+            {"results": results[:50], "total_matches": len(results)},
         )
     except Exception as e:
         logger.error(f"Error in handle_search_transcripts: {e}")
@@ -1872,15 +1989,12 @@ def handle_search_transcripts(query: str, speaker: str = None) -> dict:
 def handle_multi_search(query: str) -> dict:
     """Combined search across all sources."""
     try:
-        results = {
-            "local": [],
-            "corpora": [],
-            "transcripts": [],
-            "knowledge": {}
-        }
+        results = {"local": [], "corpora": [], "transcripts": [], "knowledge": {}}
 
         # Local search (limited)
-        local_result = handle_search_local(query, paths=[str(KNOWLEDGE_DATA_DIR)], file_types=["json", "md"])
+        local_result = handle_search_local(
+            query, paths=[str(KNOWLEDGE_DATA_DIR)], file_types=["json", "md"]
+        )
         if local_result.get("ok"):
             results["local"] = local_result["data"]["results"][:10]
 
@@ -1900,22 +2014,22 @@ def handle_multi_search(query: str) -> dict:
             results["transcripts"] = transcript_result["data"]["results"][:10]
 
         total_matches = (
-            len(results["local"]) +
-            len(results["knowledge"].get("kb_entries", [])) +
-            len(results["corpora"]) +
-            len(results["transcripts"])
+            len(results["local"])
+            + len(results["knowledge"].get("kb_entries", []))
+            + len(results["corpora"])
+            + len(results["transcripts"])
         )
 
         return ResponseEnvelope.success(
             f"Multi-search found {total_matches} matches across all sources",
-            {"results": results, "total_matches": total_matches}
+            {"results": results, "total_matches": total_matches},
         )
     except Exception as e:
         logger.error(f"Error in handle_multi_search: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_deduplicate_results(results: List[Dict], threshold: float = 0.9) -> dict:
+def handle_deduplicate_results(results: list[dict], threshold: float = 0.9) -> dict:
     """Remove duplicate search results."""
     try:
         # Simple deduplication based on exact text matches
@@ -1935,14 +2049,14 @@ def handle_deduplicate_results(results: List[Dict], threshold: float = 0.9) -> d
 
         return ResponseEnvelope.success(
             f"Removed {removed} duplicates, {len(deduped)} unique results remaining",
-            {"results": deduped, "removed_count": removed, "unique_count": len(deduped)}
+            {"results": deduped, "removed_count": removed, "unique_count": len(deduped)},
         )
     except Exception as e:
         logger.error(f"Error in handle_deduplicate_results: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_cluster_results(results: List[Dict], num_clusters: int = 5) -> dict:
+def handle_cluster_results(results: list[dict], num_clusters: int = 5) -> dict:
     """Cluster search results by topic."""
     try:
         clusters = {}
@@ -1963,18 +2077,15 @@ def handle_cluster_results(results: List[Dict], num_clusters: int = 5) -> dict:
                 clusters[cluster_key] = []
             clusters[cluster_key].append(result)
 
-        cluster_summary = {
-            cluster: len(items)
-            for cluster, items in clusters.items()
-        }
+        cluster_summary = {cluster: len(items) for cluster, items in clusters.items()}
 
         return ResponseEnvelope.success(
             f"Clustered {len(results)} results into {len(clusters)} groups",
             {
                 "clusters": clusters,
                 "cluster_summary": cluster_summary,
-                "total_results": len(results)
-            }
+                "total_results": len(results),
+            },
         )
     except Exception as e:
         logger.error(f"Error in handle_cluster_results: {e}")
@@ -1984,19 +2095,20 @@ def handle_cluster_results(results: List[Dict], num_clusters: int = 5) -> dict:
 def main():
     """Run the MCP server."""
     import asyncio
+
     global db
 
     # Set environment defaults for local PostgreSQL (primary backend)
-    os.environ.setdefault('DB_BACKEND', 'local')
-    os.environ.setdefault('DB_HOST', '192.168.1.12')
-    os.environ.setdefault('DB_PORT', '5433')
-    os.environ.setdefault('DB_NAME', 'mpm_system')
-    os.environ.setdefault('DB_USER', 'latvian_user')
-    os.environ.setdefault('DB_PASSWORD', 'latvian_dev_password_2026')
+    os.environ.setdefault("DB_BACKEND", "local")
+    os.environ.setdefault("DB_HOST", "192.168.1.12")
+    os.environ.setdefault("DB_PORT", "5433")
+    os.environ.setdefault("DB_NAME", "mpm_system")
+    os.environ.setdefault("DB_USER", "latvian_user")
+    os.environ.setdefault("DB_PASSWORD", "latvian_dev_password_2026")
 
     # Initialize database client (supports both Supabase and local PostgreSQL)
     db = get_db_client()
-    backend = os.getenv('DB_BACKEND', 'local')
+    backend = os.getenv("DB_BACKEND", "local")
     logger.info(f"Connected to database backend: {backend}")
 
     logger.info("Starting knowledge-mcp server")
