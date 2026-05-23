@@ -93,6 +93,16 @@ def format_response(response: dict) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=json.dumps(response, default=json_serializer))]
 
 
+def _sanitize_search_query(query: str) -> str:
+    """Strip PostgREST filter metacharacters to prevent filter injection."""
+    # Remove commas, dots, parentheses, and PostgREST operator tokens
+    sanitized = re.sub(r'[,.()\[\]]', ' ', query)
+    # Strip known PostgREST operator patterns
+    sanitized = re.sub(r'\b(wfts|plfts|fts|phfts|ilike|like|eq|neq|gt|gte|lt|lte|in|is)\b', '', sanitized, flags=re.IGNORECASE)
+    # Collapse whitespace
+    return ' '.join(sanitized.split()).strip()
+
+
 def _coerce_arguments(arguments: dict, schema: dict) -> dict:
     """Coerce JSON-stringified array/object values into proper Python types.
 
@@ -366,7 +376,9 @@ _TOOL_DEFINITIONS = [
                     },
                     "chunk_size": {"type": "integer", "default": 2000, "description": "Max tokens per chunk (chunked strategy only)"},
                     "tags": {"type": "array", "items": {"type": "string"}, "description": "Additional tags"},
-                    "overwrite": {"type": "boolean", "default": False, "description": "Replace existing KB entries from this doc"}
+                    "overwrite": {"type": "boolean", "default": False, "description": "Replace existing KB entries from this doc"},
+                    "author": {"type": "string", "description": "Who is ingesting (optional, defaults to None)"},
+                    "source_type": {"type": "string", "default": "system", "description": "Source type for attribution (defaults to 'system' since ingestion is automated)"}
                 },
                 "required": ["doc_path"]
             }
@@ -381,7 +393,9 @@ _TOOL_DEFINITIONS = [
                     "pattern": {"type": "string", "default": "*.md", "description": "File pattern (e.g., *.md)"},
                     "strategy": {"type": "string", "enum": ["full", "chunked", "summary"], "default": "chunked"},
                     "recursive": {"type": "boolean", "default": True, "description": "Scan subdirectories"},
-                    "exclude_patterns": {"type": "array", "items": {"type": "string"}, "description": "Patterns to exclude"}
+                    "exclude_patterns": {"type": "array", "items": {"type": "string"}, "description": "Patterns to exclude"},
+                    "author": {"type": "string", "description": "Who is ingesting (optional, defaults to None)"},
+                    "source_type": {"type": "string", "default": "system", "description": "Source type for attribution (defaults to 'system' since ingestion is automated)"}
                 },
                 "required": ["dir_path"]
             }
@@ -709,9 +723,11 @@ def handle_kb_add(topic: str, title: str, content: str, tags: list = None,
 def handle_kb_search(query: str, topic: str = None) -> dict:
     """Search KB entries using PostgreSQL full-text search."""
     try:
+        # Sanitize query to prevent PostgREST filter injection (e.g. "x,content.wfts.secret")
+        safe_query = _sanitize_search_query(query)
         # Sanitize query for tsquery - replace spaces with & for AND logic
         # This makes "Phase 2" search for "Phase & 2"
-        tsquery_safe = query.strip().replace(" ", " & ")
+        tsquery_safe = _sanitize_search_query(query).replace(" ", " & ")
 
         query_builder = db.table("knowledge.kb_entries")\
             .select("kb_id, topic, title, tags, author, source_type, verified")
@@ -725,7 +741,7 @@ def handle_kb_search(query: str, topic: str = None) -> dict:
         try:
             # Try websearch FTS first (most flexible - handles phrases, AND/OR)
             query_builder = query_builder.or_(
-                f"title.wfts.{query},content.wfts.{query}"
+                f"title.wfts.{safe_query},content.wfts.{safe_query}"
             )
         except Exception as fts_error:
             # Fallback to plain text FTS if websearch fails
@@ -1143,7 +1159,8 @@ def handle_snapshot_config(config_name: str, config_data: dict) -> dict:
 # =============================================================================
 
 def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: int = 2000,
-                         tags: List[str] = None, overwrite: bool = False) -> dict:
+                         tags: List[str] = None, overwrite: bool = False,
+                         author: str = None, source_type: str = "system") -> dict:
     """Ingest single markdown document into KB."""
     try:
         doc_path = Path(doc_path).resolve()
@@ -1206,7 +1223,9 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
                 "tags": doc_tags,
                 "source_doc": str(doc_path),
                 "source_section": None,
-                "line_range": [1, len(content.split('\n'))]
+                "line_range": [1, len(content.split('\n'))],
+                "author": author,
+                "source_type": source_type,
             }
             db.table("knowledge.kb_entries").insert(entry).execute()
             kb_ids.append(kb_id)
@@ -1225,7 +1244,9 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
                     "tags": doc_tags,
                     "source_doc": str(doc_path),
                     "source_section": chunk.section,
-                    "line_range": [chunk.line_start, chunk.line_end]
+                    "line_range": [chunk.line_start, chunk.line_end],
+                    "author": author,
+                    "source_type": source_type,
                 }
                 db.table("knowledge.kb_entries").insert(entry).execute()
                 kb_ids.append(kb_id)
@@ -1275,7 +1296,8 @@ def handle_kb_ingest_doc(doc_path: str, strategy: str = "chunked", chunk_size: i
 
 
 async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: str = "chunked",
-                         recursive: bool = True, exclude_patterns: List[str] = None) -> dict:
+                         recursive: bool = True, exclude_patterns: List[str] = None,
+                         author: str = None, source_type: str = "system") -> dict:
     """Batch ingest directory (5x faster with async/await)."""
     import asyncio
     USE_ASYNC_INGESTION = os.getenv("ENABLE_ASYNC_INGESTION", "true").lower() == "true"
@@ -1339,7 +1361,9 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
                         strategy=strategy,
                         chunk_size=2000,
                         tags=None,
-                        overwrite=False
+                        overwrite=False,
+                        author=author,
+                        source_type=source_type,
                     )
 
                     return {
@@ -1383,7 +1407,16 @@ async def handle_kb_ingest_dir(dir_path: str, pattern: str = "*.md", strategy: s
             # OLD: ThreadPoolExecutor (fallback for testing)
             with ThreadPoolExecutor(max_workers=4) as executor:
                 future_to_file = {
-                    executor.submit(handle_kb_ingest_doc, str(f), strategy): f
+                    executor.submit(
+                        handle_kb_ingest_doc,
+                        str(f),
+                        strategy,
+                        2000,
+                        None,
+                        False,
+                        author,
+                        source_type,
+                    ): f
                     for f in files
                 }
 
