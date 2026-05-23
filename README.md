@@ -1,31 +1,30 @@
-# Lore
+# lore-knowledge-mcp
 
-**The operational knowledge layer for engineers and their AI agents.**
+**Operational knowledge layer for engineering teams and their AI agents.**
 
 [![Version](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/davidgut1982/lore-mcp)
+[![CI](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-green)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-blue)](https://postgresql.org)
-[![CI](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
 ## The Problem
 
-Your agents are capable. But every session, they start from zero — no knowledge of your infrastructure, no memory of what broke last month, no idea why you made that architecture call.
+Your agents start every session knowing nothing about your systems. Every runbook you've written. Every gotcha you've hit. Every incident you've debugged. None of it carries forward.
 
 You re-explain. They re-discover. Context vanishes when the session ends.
 
 **Lore fixes that.**
 
 ```
-Without Lore:                    With Lore:
-─────────────────                ──────────────────────────────────
-Agent session starts             Agent queries Lore on startup
+Without Lore                     With Lore
+─────────────────────────────    ──────────────────────────────────
+Agent starts fresh every time    Agent queries Lore on startup
 "How does our infra work?"       Gets: topology, gotchas, runbooks,
-You re-explain everything        recent incidents, verified decisions
-Session ends, context lost       Knowledge persists across all sessions
-                                 Next agent starts informed
+You re-explain everything        past incidents, verified decisions
+Context lost at session end      Knowledge persists across all sessions
 ```
 
 ---
@@ -34,76 +33,50 @@ Session ends, context lost       Knowledge persists across all sessions
 
 ### Knowledge Base
 
-Structured operational knowledge your agents query in real time.
-
-```python
-# Capture a hard-won gotcha
-kb_add(topic="proxmox", title="LXC resolv.conf inherits from host — breaks without Tailscale",
-       content="...", author="david", source_type="human")
-
-# Agent queries before touching anything
-kb_search(query="proxmox lxc dns")  # returns the gotcha instantly
-```
+Your team's operational knowledge — always queryable by any agent. Capture the things that matter: runbooks, hard-won gotchas, architecture decisions, deployment state. Every entry carries attribution so agents know who wrote it and whether a human has verified it.
 
 ### Investigations
 
-Structured debugging with a traceable paper trail from symptom to resolution.
-
-```python
-investigation_add(topic="anki-media", title="Media not loading after container restart",
-                  content="Hypothesis: mount collision between container volumes...")
-
-investigation_log_experiment(title="Mount collision test", hypothesis="...",
-                              results={"collision": True}, conclusion="Confirmed. Remove duplicate mount.")
-```
-
-Six months later, a different engineer hits the same issue. The trail is there.
+When something breaks, open a structured investigation. Document the symptom, test hypotheses, record what you tried and what you found. Six months later when the same issue resurfaces — different engineer, different agent — the trail is there.
 
 ### Journal
 
-Permanent record of milestones, architecture decisions, and buying decisions.
-
-```python
-journal_append(entry_type="milestone",
-               content="Migrated monitoring stack to ops bastion. Rationale: centralized visibility.",
-               tags=["monitoring", "migration"])
-```
+A permanent record of milestones, architecture decisions, and buying decisions. The kind of thing that lives in someone's head until they leave the team.
 
 ---
 
-## Attribution
+## Built for Multi-Agent Systems
 
-In a multi-agent system, provenance matters. Every Lore entry carries `author`, `source_type`, and `verified`.
+In a multi-agent environment, provenance matters. Every Lore entry carries `author`, `source_type`, and `verified`.
 
 ```
-kb_search("proxmox lxc networking")
+kb_search("proxmox lxc dns")
 
-Results:
-  [1] "LXC resolv.conf inherits from host — Tailscale breaks containers"
-      author: david | source_type: human | verified: true
+  [1] "LXC inherits host resolv.conf — Tailscale breaks containers"
+      david · human · ✓ verified
 
-  [2] "LXC container DNS fix after Tailscale install"
-      author: engineer-agent | source_type: agent | verified: null
+  [2] "LXC DNS fix after Tailscale install"
+      engineer-agent · agent · unreviewed
 
   [3] "LXC DNS configuration reference"
-      author: research-agent | source_type: agent | verified: false
+      research-agent · agent · ✗ disputed
 ```
 
-Agents know: result 1 is production-safe. Result 2, spot-check first. Result 3, review before acting.
+Your agents know: result 1 is production-safe. Result 2, spot-check before acting. Result 3, review first.
 
 ---
 
 ## Quick Start
 
-### Solo (SQLite — no server needed)
+### Solo (SQLite — zero config, no server needed)
 
 ```bash
-pip install lore-mcp
+pip install lore-knowledge-mcp
 export DB_BACKEND=sqlite KNOWLEDGE_DATA_DIR=~/.lore
 lore-mcp
 ```
 
-Add to Claude Code (`~/.claude.json` or project `.mcp.json`):
+Add to Claude Code:
 
 ```json
 {
@@ -119,10 +92,10 @@ Add to Claude Code (`~/.claude.json` or project `.mcp.json`):
 }
 ```
 
-### Team (PostgreSQL)
+### Team (PostgreSQL — shared knowledge layer)
 
 ```bash
-pip install lore-mcp
+pip install lore-knowledge-mcp
 export DB_BACKEND=local DB_HOST=localhost DB_PORT=5432 \
        DB_NAME=lore DB_USER=lore_user DB_PASSWORD=yourpassword
 lore-mcp --host 0.0.0.0 --port 5555
@@ -147,10 +120,10 @@ All agents on your team point at `http://your-server:5555/mcp`. One shared knowl
 ### Investigations
 | Tool | What it does |
 |---|---|
-| `investigation_add` | Open or add to an investigation (topic, title, content, tags). |
+| `investigation_add` | Open or add to an investigation. |
 | `investigation_list` | List investigations, filter by topic. |
 | `investigation_get` | Fetch full investigation by ID. |
-| `investigation_log_experiment` | Log a structured experiment with hypothesis, methodology, results, conclusion. |
+| `investigation_log_experiment` | Log a structured hypothesis → result → conclusion. |
 | `investigation_list_experiments` | List all logged experiments. |
 
 ### Journal
@@ -176,22 +149,13 @@ All agents on your team point at `http://your-server:5555/mcp`. One shared knowl
 | `mcp_index_get_server` | Get all tools for a specific MCP server. |
 | `mcp_index_rebuild` | Force a full rescan. |
 
-### Search
-| Tool | What it does |
-|---|---|
-| `multi_search` | Search across KB, investigations, journal, and transcripts at once. |
-| `search_local` | Search local files by content. |
-| `search_transcripts` | Search Whisper transcript segments. |
-| `deduplicate_results` | Deduplicate a result set by similarity. |
-| `cluster_results` | Cluster results by topic. |
-
 ---
 
 ## Backends
 
 | Backend | Use case | Setup |
 |---|---|---|
-| SQLite | Solo / local dev / single machine | No server, one env var |
+| SQLite | Solo / local / single machine | No server, one env var |
 | PostgreSQL | Team / shared / production | Self-hosted DB |
 | Supabase | Cloud PostgreSQL | Managed, zero-ops |
 
@@ -204,6 +168,12 @@ All agents on your team point at `http://your-server:5555/mcp`. One shared knowl
 | OB1 / personal memory | One person | Your thoughts and captures | No |
 | Mem0 / Zep | App developers | User preferences, conversations | Partially |
 | Confluence / Notion | Human teams | Documentation (human-browsed) | No |
-| **Lore** | **Engineering teams + AI agents** | **How your systems work** | **Yes** |
+| **lore-knowledge-mcp** | **Engineering teams + AI agents** | **How your systems actually work** | **Yes** |
 
-Lore is not a second brain. It's the operational intelligence layer your agents need to work in your environment — not just any environment.
+Lore is not a second brain. It's the operational intelligence your agents need to work in *your* environment — not just any environment.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE)
