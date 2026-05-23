@@ -29,6 +29,19 @@ Context lost at session end      Knowledge persists across all sessions
 
 ---
 
+## How It's Different
+
+| Tool | Built for | What it remembers | Agent-native |
+|---|---|---|---|
+| OB1 / personal memory | One person | Your thoughts and captures | No |
+| Mem0 / Zep | App developers | User preferences, conversations | Partially |
+| Confluence / Notion | Human teams | Documentation (human-browsed) | No |
+| **lore-knowledge-mcp** | **Engineering teams + AI agents** | **How your systems actually work** | **Yes** |
+
+Lore is not a second brain. It's the operational intelligence your agents need to work in *your* environment — not just any environment.
+
+---
+
 ## What Lore Does
 
 ### Knowledge Base
@@ -158,19 +171,6 @@ All agents on your team point at `http://your-server:5555/mcp`. One shared knowl
 | SQLite | Solo / local / single machine | No server, one env var |
 | PostgreSQL | Team / shared / production | Self-hosted DB |
 | Supabase | Cloud PostgreSQL | Managed, zero-ops |
-
----
-
-## How It's Different
-
-| Tool | Built for | What it remembers | Agent-native |
-|---|---|---|---|
-| OB1 / personal memory | One person | Your thoughts and captures | No |
-| Mem0 / Zep | App developers | User preferences, conversations | Partially |
-| Confluence / Notion | Human teams | Documentation (human-browsed) | No |
-| **lore-knowledge-mcp** | **Engineering teams + AI agents** | **How your systems actually work** | **Yes** |
-
-Lore is not a second brain. It's the operational intelligence your agents need to work in *your* environment — not just any environment.
 
 ---
 
