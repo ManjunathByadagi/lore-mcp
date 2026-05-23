@@ -1,3 +1,3 @@
-"""Knowledge MCP Server - Unified knowledge management (KB + KG + research + journal)."""
+"""Lore — unified knowledge-management MCP server (KB + investigations + journal + MCP-index)."""
 
-__version__ = "0.1.0"
+__version__ = "0.5.0"

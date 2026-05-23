@@ -1,137 +1,130 @@
-"""Basic tests for Knowledge MCP server."""
+"""Basic tests for the Lore MCP server.
+
+Verifies importability of the package, presence of the module-level
+tool handlers in lore.server, and the public CLI entry point.
+"""
+
+import os
 
 import pytest
-import tempfile
-import os
-from pathlib import Path
 
 
-def test_import():
-    """Test that the lore module can be imported."""
-    import lore
-    assert lore is not None
+def test_package_import():
+    """The lore package imports cleanly."""
+    import lore  # noqa: F401
 
 
-def test_server_import():
-    """Test that the server module can be imported."""
+def test_server_module_import():
+    """The server module imports cleanly."""
     from lore import server
-    assert server is not None
+
+    # The MCP Server instance is exposed as 'app' (used by the HTTP wrapper)
+    assert hasattr(server, "app"), "lore.server.app (MCP Server instance) missing"
+
+    # main() is the entry point referenced by pyproject.toml
+    assert callable(getattr(server, "main", None)), "lore.server.main missing"
 
 
-@pytest.fixture
-def temp_data_dir():
-    """Create a temporary directory for testing."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        yield Path(temp_dir)
+def test_response_envelope_import():
+    """ResponseEnvelope helper is importable (used by every handler)."""
+    from lore.response import ErrorCodes, ResponseEnvelope
+
+    assert hasattr(ResponseEnvelope, "ok")
+    assert hasattr(ResponseEnvelope, "error")
+    assert hasattr(ErrorCodes, "UNEXPECTED_EXCEPTION")
 
 
-def test_json_backend_basic(temp_data_dir):
-    """Test basic functionality with JSON backend."""
-    # Set environment for JSON backend
-    os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
-
-    # Import after setting environment
-    from lore.server import KnowledgeMCPServer
-
-    # Create server instance
-    server = KnowledgeMCPServer()
-
-    # Basic validation
-    assert server is not None
-    assert hasattr(server, 'kb_add')
-    assert hasattr(server, 'kb_search')
-
-
-def test_version():
-    """Test that version information is available."""
-    import lore
-    # Basic check that version info exists
-    assert hasattr(lore, '__version__') or True  # May not be set in dev
-
-
-class TestKnowledgeOperations:
-    """Test knowledge base operations."""
-
-    def test_kb_add_structure(self, temp_data_dir):
-        """Test that kb_add has proper structure."""
-        os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
-
-        from lore.server import KnowledgeMCPServer
-        server = KnowledgeMCPServer()
-
-        # Check that method exists and is callable
-        assert hasattr(server, 'kb_add')
-        assert callable(getattr(server, 'kb_add'))
-
-    def test_kb_search_structure(self, temp_data_dir):
-        """Test that kb_search has proper structure."""
-        os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
-
-        from lore.server import KnowledgeMCPServer
-        server = KnowledgeMCPServer()
-
-        # Check that method exists and is callable
-        assert hasattr(server, 'kb_search')
-        assert callable(getattr(server, 'kb_search'))
-
-
-class TestResearchOperations:
-    """Test research workflow operations."""
-
-    def test_research_methods_exist(self, temp_data_dir):
-        """Test that research methods exist."""
-        os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
-
-        from lore.server import KnowledgeMCPServer
-        server = KnowledgeMCPServer()
-
-        # Check research methods
-        research_methods = [
-            'research_add_note',
-            'research_list_notes',
-            'research_add_source',
-            'research_list_sources'
-        ]
-
-        for method in research_methods:
-            assert hasattr(server, method), f"Missing method: {method}"
-
-
-class TestJournalOperations:
-    """Test journal operations."""
-
-    def test_journal_methods_exist(self, temp_data_dir):
-        """Test that journal methods exist."""
-        os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
-
-        from lore.server import KnowledgeMCPServer
-        server = KnowledgeMCPServer()
-
-        # Check journal methods
-        journal_methods = [
-            'journal_append',
-            'journal_get',
-            'journal_list'
-        ]
-
-        for method in journal_methods:
-            assert hasattr(server, method), f"Missing method: {method}"
-
-
-# Add some integration tests if database is available
-@pytest.mark.skipif(
-    not os.getenv('TEST_DATABASE_URL'),
-    reason="Database tests require TEST_DATABASE_URL"
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "handle_kb_add",
+        "handle_kb_search",
+        "handle_kb_get",
+        "handle_kb_list",
+        "handle_kb_update",
+        "handle_kb_delete",
+        "handle_kb_ingest_doc",
+        "handle_kb_ingest_dir",
+        "handle_kb_sync_status",
+    ],
 )
-class TestDatabaseIntegration:
-    """Test database integration when available."""
+def test_kb_handlers_exist(handler_name):
+    """Each knowledge-base handler is exported as a module-level callable."""
+    from lore import server
 
-    def test_database_connection(self):
-        """Test database connection."""
-        os.environ['DATABASE_URL'] = os.getenv('TEST_DATABASE_URL')
+    handler = getattr(server, handler_name, None)
+    assert callable(handler), f"{handler_name} not found on lore.server"
 
-        from lore.server import KnowledgeMCPServer
-        server = KnowledgeMCPServer()
 
-        # If we get here without error, database connection is working
-        assert server is not None
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "handle_investigation_add",
+        "handle_investigation_list",
+        "handle_investigation_get",
+        "handle_investigation_log_experiment",
+        "handle_investigation_list_experiments",
+    ],
+)
+def test_investigation_handlers_exist(handler_name):
+    """Investigation workflow handlers are present (renamed from research_* in v0.4.0)."""
+    from lore import server
+
+    handler = getattr(server, handler_name, None)
+    assert callable(handler), f"{handler_name} not found on lore.server"
+
+
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "handle_journal_append",
+        "handle_journal_get",
+        "handle_journal_list",
+    ],
+)
+def test_journal_handlers_exist(handler_name):
+    """Journal handlers are present."""
+    from lore import server
+
+    handler = getattr(server, handler_name, None)
+    assert callable(handler), f"{handler_name} not found on lore.server"
+
+
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "handle_mcp_index_scan",
+        "handle_mcp_index_search",
+        "handle_mcp_index_get_server",
+        "handle_mcp_index_get_tool",
+        "handle_mcp_index_rebuild",
+    ],
+)
+def test_mcp_index_handlers_exist(handler_name):
+    """MCP-index handlers are present."""
+    from lore import server
+
+    handler = getattr(server, handler_name, None)
+    assert callable(handler), f"{handler_name} not found on lore.server"
+
+
+def test_removed_legacy_handlers_are_gone():
+    """Knowledge-graph and source-tracking handlers were removed in v0.4.0."""
+    from lore import server
+
+    for legacy in (
+        "handle_kg_add",
+        "handle_kg_search",
+        "handle_research_add_source",
+        "handle_research_list_sources",
+        "handle_kb_link_to_source",
+    ):
+        assert not hasattr(server, legacy), f"Legacy handler {legacy} still present"
+
+
+def test_sqlite_backend_enum_available():
+    """SQLite is a first-class backend option."""
+    from lore.db_client import DatabaseBackend
+
+    assert DatabaseBackend.SQLITE.value == "sqlite"
+    assert DatabaseBackend.LOCAL.value == "local"

@@ -2092,30 +2092,76 @@ def handle_cluster_results(results: list[dict], num_clusters: int = 5) -> dict:
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def main():
-    """Run the MCP server."""
+def main() -> None:
+    """Entry point for the 'lore-mcp' console script.
+
+    By default runs as an MCP stdio server. If --host/--port are passed,
+    starts the HTTP/SSE wrapper instead (useful for systemd or Docker
+    deployments where the MCP client speaks HTTP).
+
+    Backend configuration is read entirely from the environment
+    (DB_BACKEND, KNOWLEDGE_DATA_DIR, DB_HOST, DB_PORT, DB_NAME, DB_USER,
+    DB_PASSWORD, SUPABASE_URL, SUPABASE_KEY). The default backend is
+    'sqlite' so a clean checkout boots without external services.
+    """
+    import argparse
     import asyncio
 
+    from . import __version__
+
+    parser = argparse.ArgumentParser(
+        prog="lore-mcp",
+        description="Lore MCP server (stdio by default, HTTP/SSE with --host/--port).",
+    )
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="Bind address for HTTP/SSE mode (e.g. 0.0.0.0). "
+        "Omit for stdio mode.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="TCP port for HTTP/SSE mode (e.g. 5555). Omit for stdio mode.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"lore-mcp {__version__}",
+    )
+    args = parser.parse_args()
+
+    # Default to the zero-friction SQLite backend if none is configured.
+    # All other backends require their own env vars and will fail loudly
+    # in db_client if misconfigured — we never inject credentials here.
+    os.environ.setdefault("DB_BACKEND", "sqlite")
+
     global db
-
-    # Set environment defaults for local PostgreSQL (primary backend)
-    os.environ.setdefault("DB_BACKEND", "local")
-    os.environ.setdefault("DB_HOST", "192.168.1.12")
-    os.environ.setdefault("DB_PORT", "5433")
-    os.environ.setdefault("DB_NAME", "mpm_system")
-    os.environ.setdefault("DB_USER", "latvian_user")
-    os.environ.setdefault("DB_PASSWORD", "latvian_dev_password_2026")
-
-    # Initialize database client (supports both Supabase and local PostgreSQL)
     db = get_db_client()
-    backend = os.getenv("DB_BACKEND", "local")
+    backend = os.getenv("DB_BACKEND", "sqlite")
     logger.info(f"Connected to database backend: {backend}")
 
-    logger.info("Starting knowledge-mcp server")
+    if args.host is not None or args.port is not None:
+        # HTTP/SSE mode — delegate to the wrapper, which mounts our 'app'.
+        from .mcp_http_wrapper_sse import create_app
 
-    async def _run():
+        import uvicorn
+
+        host = args.host or "127.0.0.1"
+        port = args.port or 5555
+        starlette_app = create_app(app, "lore.server")
+        logger.info(f"Starting Lore MCP HTTP server on {host}:{port}")
+        uvicorn.run(starlette_app, host=host, port=port, log_level="info")
+        return
+
+    logger.info("Starting Lore MCP server (stdio)")
+
+    async def _run() -> None:
         async with stdio_server() as (read_stream, write_stream):
-            await app.run(read_stream, write_stream, app.create_initialization_options())
+            await app.run(
+                read_stream, write_stream, app.create_initialization_options()
+            )
 
     asyncio.run(_run())
 

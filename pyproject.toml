@@ -7,20 +7,24 @@ name = "lore-mcp"
 version = "0.5.0"
 description = "Unified knowledge management MCP server with document intelligence and research workflows"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = {text = "MIT"}
 authors = [
-    {name = "Knowledge-MCP Contributors", email = "contact@lore-mcp.dev"},
+    {name = "David Gutowsky"},
 ]
 keywords = ["mcp", "knowledge-management", "ai", "claude", "research", "documentation"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
     "Topic :: Text Processing :: Indexing",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
