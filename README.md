@@ -81,6 +81,14 @@ Your agents know: result 1 is production-safe. Result 2, spot-check before actin
 
 ---
 
+## Automating Lore in Your Workflow
+
+Add one line to every agent's system prompt and one entry to `~/.mcp.json` — that's the entire integration. Each phase of your engineering workflow reads prior knowledge from Lore and writes its findings back, so nothing is re-discovered from scratch.
+
+→ **[How to wire Lore into a 6-phase multi-agent pipeline](docs/multi-agent-workflow.md)** — full walkthrough with code examples for every phase: research, architecture review, implementation, adversarial code review, QA, and documentation.
+
+---
+
 ## Quick Start
 
 ### Solo (SQLite — zero config, no server needed)
