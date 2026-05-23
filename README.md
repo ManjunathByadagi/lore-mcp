@@ -1,14 +1,12 @@
-# lore-knowledge-mcp
+# Lore
 
-**Operational knowledge layer for engineering teams and their AI agents.**
+**`lore-knowledge-mcp`** · Operational knowledge layer for engineering teams and their AI agents.
 
 [![Version](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/davidgut1982/lore-mcp)
 [![CI](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-green)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
----
 
 ![Lore demo](docs/demo.gif)
 
@@ -40,7 +38,7 @@ Context lost at session end      Knowledge persists across all sessions
 | OB1 / personal memory | One person | Your thoughts and captures | No |
 | Mem0 / Zep | App developers | User preferences, conversations | Partially |
 | Confluence / Notion | Human teams | Documentation (human-browsed) | No |
-| **lore-knowledge-mcp** | **Engineering teams + AI agents** | **How your systems actually work** | **Yes** |
+| **Lore** | **Engineering teams + AI agents** | **How your systems actually work** | **Yes** |
 
 Lore is not a second brain. It's the operational intelligence your agents need to work in *your* environment — not just any environment.
 
@@ -102,7 +100,7 @@ Add to Claude Code:
       "command": "lore-mcp",
       "env": {
         "DB_BACKEND": "sqlite",
-        "KNOWLEDGE_DATA_DIR": "/home/yourname/.lore"
+        "KNOWLEDGE_DATA_DIR": "~/.lore"
       }
     }
   }
@@ -165,6 +163,15 @@ All agents on your team point at `http://your-server:5555/mcp`. One shared knowl
 | `mcp_index_search` | Search indexed tools by description. |
 | `mcp_index_get_server` | Get all tools for a specific MCP server. |
 | `mcp_index_rebuild` | Force a full rescan. |
+
+### Search
+| Tool | What it does |
+|---|---|
+| `multi_search` | Search across KB, investigations, journal, and transcripts at once. |
+| `search_local` | Search local files by content. |
+| `search_transcripts` | Search Whisper transcript segments. |
+| `deduplicate_results` | Deduplicate a result set by similarity threshold. |
+| `cluster_results` | Cluster results by topic. |
 
 ---
 
