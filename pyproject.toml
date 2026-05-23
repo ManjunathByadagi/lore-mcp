@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lore-mcp"
+name = "lore-knowledge-mcp"
 version = "0.5.0"
 description = "Unified knowledge management MCP server with document intelligence and research workflows"
 readme = "README.md"
@@ -52,7 +52,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "black>=23.0.0",
     "mypy>=1.5.0",
-    "ruff>=0.0.287",
+    "ruff>=0.1",
     "pre-commit>=3.3.0",
 ]
 docs = [
@@ -72,10 +72,10 @@ test = [
 lore-mcp = "lore.server:main"
 
 [project.urls]
-Homepage = "https://github.com/your-org/lore-mcp"
-Documentation = "https://github.com/your-org/lore-mcp#readme"
-Repository = "https://github.com/your-org/lore-mcp.git"
-Issues = "https://github.com/your-org/lore-mcp/issues"
+Homepage = "https://github.com/davidgut1982/lore-mcp"
+Documentation = "https://github.com/davidgut1982/lore-mcp#readme"
+Repository = "https://github.com/davidgut1982/lore-mcp.git"
+Issues = "https://github.com/davidgut1982/lore-mcp/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
