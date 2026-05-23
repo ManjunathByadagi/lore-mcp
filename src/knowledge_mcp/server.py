@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Knowledge MCP Server - Supabase Backend
+Lore MCP Server - the operational knowledge layer for engineers and AI agents.
 
 Unified knowledge management system for:
-- Knowledge Base (structured documents)
-- Research (notes, sources, experiments)
+- Knowledge Base (structured operational knowledge with attribution)
+- Investigations (ops debugging notes and structured experiments)
 - Journal (decision log and config snapshots)
 - MCP Index (tool discovery and search)
+- Search (local files, corpora, transcripts, multi-source)
 
-Spec: LATVIAN_LAB_MCP_MASTER_SPEC_v1.3 § 4.1 + § 4.1.5 (Document Ingestion)
+Spec: Lore v0.4.0 — KG and source-tracking tool surfaces removed; research surface
+renamed to investigations; attribution model added (author, source_type, verified).
 """
 
 import os
@@ -21,7 +23,6 @@ from pathlib import Path
 from typing import Any, List, Dict, Optional
 from datetime import datetime, date
 import uuid
-import psycopg2
 import hashlib
 import glob as glob_module
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -175,7 +176,9 @@ _TOOL_DEFINITIONS = [
                     "topic": {"type": "string", "description": "Topic"},
                     "title": {"type": "string", "description": "Entry title"},
                     "content": {"type": "string", "description": "Entry content"},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags"}
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags"},
+                    "author": {"type": "string", "description": "Who is creating this entry (your name, agent name, or system). Optional."},
+                    "source_type": {"type": "string", "description": "Origin: 'human', 'agent', or 'system'. Optional, defaults to null."}
                 },
                 "required": ["topic", "title", "content"]
             }
@@ -223,7 +226,8 @@ _TOOL_DEFINITIONS = [
                     "content": {"type": "string", "description": "New content text"},
                     "metadata": {"type": "object", "description": "Updated metadata object"},
                     "tags": {"type": "array", "items": {"type": "string"}, "description": "Updated tags array"},
-                    "topic": {"type": "string", "description": "Updated topic/category for the entry"}
+                    "topic": {"type": "string", "description": "Updated topic/category for the entry"},
+                    "verified": {"type": ["boolean", "null"], "description": "Mark entry as human-verified (true), disputed (false), or reset to unreviewed (null)."}
                 },
                 "required": ["entry_id"]
             }
@@ -241,73 +245,10 @@ _TOOL_DEFINITIONS = [
             }
         ),
 
-        # Knowledge Graph Tools (5)
+        # Investigations Tools (5)
         types.Tool(
-            name="kg_add_node",
-            description="Add a node to knowledge graph",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "label": {"type": "string", "description": "Node label"},
-                    "kind": {"type": "string", "enum": ["concept", "entity", "event", "attribute"]},
-                    "properties": {"type": "object", "description": "Node properties"}
-                },
-                "required": ["label", "kind"]
-            }
-        ),
-        types.Tool(
-            name="kg_add_edge",
-            description="Add edge between KG nodes",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "from_node": {"type": "string", "description": "Source node ID"},
-                    "to_node": {"type": "string", "description": "Target node ID"},
-                    "relation": {"type": "string", "description": "Relation type"},
-                    "properties": {"type": "object", "description": "Edge properties"}
-                },
-                "required": ["from_node", "to_node", "relation"]
-            }
-        ),
-        types.Tool(
-            name="kg_get_node",
-            description="Get KG node details",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "node_id": {"type": "string", "description": "Node ID"}
-                },
-                "required": ["node_id"]
-            }
-        ),
-        types.Tool(
-            name="kg_neighbors",
-            description="Get neighboring nodes",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "node_id": {"type": "string", "description": "Node ID"}
-                },
-                "required": ["node_id"]
-            }
-        ),
-        types.Tool(
-            name="kg_search",
-            description="Search knowledge graph",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "kind": {"type": "string", "description": "Filter by kind"}
-                },
-                "required": ["query"]
-            }
-        ),
-
-        # Research Tools (8)
-        types.Tool(
-            name="research_add_note",
-            description="Add research note",
+            name="investigation_add",
+            description="Add an investigation entry (open or append to an ops investigation)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -320,8 +261,8 @@ _TOOL_DEFINITIONS = [
             }
         ),
         types.Tool(
-            name="research_list_notes",
-            description="List research notes",
+            name="investigation_list",
+            description="List investigations",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -330,8 +271,8 @@ _TOOL_DEFINITIONS = [
             }
         ),
         types.Tool(
-            name="research_get_note",
-            description="Get research note",
+            name="investigation_get",
+            description="Get a single investigation entry by ID",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -341,34 +282,8 @@ _TOOL_DEFINITIONS = [
             }
         ),
         types.Tool(
-            name="research_add_source",
-            description="Add research source",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "kind": {"type": "string", "enum": ["paper", "book", "article", "url", "dataset"]},
-                    "url": {"type": "string"},
-                    "authors": {"type": "array", "items": {"type": "string"}},
-                    "year": {"type": "integer"},
-                    "notes": {"type": "string"}
-                },
-                "required": ["title", "kind"]
-            }
-        ),
-        types.Tool(
-            name="research_list_sources",
-            description="List research sources",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string"}
-                }
-            }
-        ),
-        types.Tool(
-            name="research_log_experiment",
-            description="Log experiment",
+            name="investigation_log_experiment",
+            description="Log a structured experiment within an investigation (hypothesis, methodology, results, conclusion)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -382,21 +297,9 @@ _TOOL_DEFINITIONS = [
             }
         ),
         types.Tool(
-            name="research_list_experiments",
-            description="List experiments",
+            name="investigation_list_experiments",
+            description="List logged investigation experiments",
             inputSchema={"type": "object", "properties": {}}
-        ),
-        types.Tool(
-            name="research_link_source_to_experiment",
-            description="Link source to experiment",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "source_id": {"type": "string"},
-                    "experiment_id": {"type": "string"}
-                },
-                "required": ["source_id", "experiment_id"]
-            }
         ),
 
         # Journal Tools (4)
@@ -494,18 +397,6 @@ _TOOL_DEFINITIONS = [
                 "required": ["dir_path"]
             }
         ),
-        types.Tool(
-            name="kb_link_to_source",
-            description="Get source document reference for a KB entry",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "kb_id": {"type": "string", "description": "KB entry ID"}
-                },
-                "required": ["kb_id"]
-            }
-        ),
-
         # MCP Index Tools (5)
         types.Tool(
             name="mcp_index_scan",
@@ -715,35 +606,17 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
         elif name == "kb_delete":
             return format_response(handle_kb_delete(**arguments))
 
-        # Knowledge Graph Tools
-        elif name == "kg_add_node":
-            return format_response(handle_kg_add_node(**arguments))
-        elif name == "kg_add_edge":
-            return format_response(handle_kg_add_edge(**arguments))
-        elif name == "kg_get_node":
-            return format_response(handle_kg_get_node(**arguments))
-        elif name == "kg_neighbors":
-            return format_response(handle_kg_neighbors(**arguments))
-        elif name == "kg_search":
-            return format_response(handle_kg_search(**arguments))
-
-        # Research Tools
-        elif name == "research_add_note":
-            return format_response(handle_research_add_note(**arguments))
-        elif name == "research_list_notes":
-            return format_response(handle_research_list_notes(**arguments))
-        elif name == "research_get_note":
-            return format_response(handle_research_get_note(**arguments))
-        elif name == "research_add_source":
-            return format_response(handle_research_add_source(**arguments))
-        elif name == "research_list_sources":
-            return format_response(handle_research_list_sources(**arguments))
-        elif name == "research_log_experiment":
-            return format_response(handle_research_log_experiment(**arguments))
-        elif name == "research_list_experiments":
-            return format_response(handle_research_list_experiments(**arguments))
-        elif name == "research_link_source_to_experiment":
-            return format_response(handle_research_link_source_to_experiment(**arguments))
+        # Investigations Tools
+        elif name == "investigation_add":
+            return format_response(handle_investigation_add(**arguments))
+        elif name == "investigation_list":
+            return format_response(handle_investigation_list(**arguments))
+        elif name == "investigation_get":
+            return format_response(handle_investigation_get(**arguments))
+        elif name == "investigation_log_experiment":
+            return format_response(handle_investigation_log_experiment(**arguments))
+        elif name == "investigation_list_experiments":
+            return format_response(handle_investigation_list_experiments(**arguments))
 
         # Journal Tools
         elif name == "journal_append":
@@ -762,8 +635,6 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
             return format_response(handle_kb_ingest_dir(**arguments))
         elif name == "kb_sync_status":
             return format_response(handle_kb_sync_status(**arguments))
-        elif name == "kb_link_to_source":
-            return format_response(handle_kb_link_to_source(**arguments))
 
         # MCP Index Tools
         elif name == "mcp_index_scan":
@@ -804,8 +675,13 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
 # Knowledge Base Handlers
 # =============================================================================
 
-def handle_kb_add(topic: str, title: str, content: str, tags: list = None) -> dict:
-    """Add KB entry."""
+def handle_kb_add(topic: str, title: str, content: str, tags: list = None,
+                  author: str = None, source_type: str = None) -> dict:
+    """Add KB entry.
+
+    Optional attribution fields (author, source_type) support multi-agent
+    provenance tracking. See `verified` flag (set via kb_update) for human review state.
+    """
     try:
         kb_id = f"kb_{uuid.uuid4().hex[:12]}"
 
@@ -814,14 +690,16 @@ def handle_kb_add(topic: str, title: str, content: str, tags: list = None) -> di
             "topic": topic,
             "title": title,
             "content": content,
-            "tags": tags or []
+            "tags": tags or [],
+            "author": author,
+            "source_type": source_type,
         }
 
         db.table("knowledge.kb_entries").insert(entry).execute()
 
         return ResponseEnvelope.success(
             f"Added KB entry: {title}",
-            {"kb_id": kb_id, "topic": topic}
+            {"kb_id": kb_id, "topic": topic, "author": author, "source_type": source_type}
         )
     except Exception as e:
         logger.error(f"Error adding KB entry: {e}")
@@ -836,7 +714,7 @@ def handle_kb_search(query: str, topic: str = None) -> dict:
         tsquery_safe = query.strip().replace(" ", " & ")
 
         query_builder = db.table("knowledge.kb_entries")\
-            .select("kb_id, topic, title, tags")
+            .select("kb_id, topic, title, tags, author, source_type, verified")
 
         if topic:
             query_builder = query_builder.eq("topic", topic)
@@ -892,7 +770,7 @@ def handle_kb_list(topic: str = None) -> dict:
     """List KB entries."""
     try:
         query = db.table("knowledge.kb_entries")\
-            .select("kb_id, topic, title, tags, created_at")\
+            .select("kb_id, topic, title, tags, author, source_type, verified, created_at")\
             .order("created_at", desc=True)
 
         if topic:
@@ -909,11 +787,18 @@ def handle_kb_list(topic: str = None) -> dict:
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, tags: list = None, topic: str = None) -> dict:
+_VERIFIED_SENTINEL = object()
+
+
+def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, tags: list = None,
+                     topic: str = None, verified: Any = _VERIFIED_SENTINEL) -> dict:
     """Update existing KB entry with partial updates support.
 
     Updates only the provided fields, preserving existing fields not specified.
     Re-embeds content if content changes. Updates updated_at timestamp.
+
+    `verified` accepts True (human-verified), False (disputed), or None (reset to
+    unreviewed). Omit the argument entirely to leave the verified state unchanged.
     """
     try:
         # First, verify the entry exists
@@ -951,14 +836,18 @@ def handle_kb_update(entry_id: str, content: str = None, metadata: dict = None, 
         if topic is not None:
             update_data["topic"] = topic
 
+        if verified is not _VERIFIED_SENTINEL:
+            # Allow True, False, or explicit None (reset to unreviewed)
+            update_data["verified"] = verified
+
         # Always update the updated_at timestamp
         update_data["updated_at"] = datetime.utcnow().isoformat()
 
-        # Only proceed with update if there are fields to update
-        if not update_data:
+        # Only proceed with update if there are fields to update beyond timestamp
+        if set(update_data.keys()) == {"updated_at"}:
             return ResponseEnvelope.error(
                 ErrorCodes.INVALID_INPUT,
-                "No fields provided for update. Specify content, metadata, and/or tags."
+                "No fields provided for update. Specify content, metadata, tags, topic, and/or verified."
             )
 
         # Perform the update
@@ -1039,11 +928,13 @@ def handle_kb_delete(entry_id: str, confirm: bool = False) -> dict:
 
 
 # =============================================================================
-# Research Handlers
+# Investigation Handlers
+# (DB tables `research_notes` and `research_experiments` are unchanged; only the
+# MCP tool/handler surface has been renamed to "investigation".)
 # =============================================================================
 
-def handle_research_add_note(topic: str, title: str, content: str, tags: list = None) -> dict:
-    """Add research note."""
+def handle_investigation_add(topic: str, title: str, content: str, tags: list = None) -> dict:
+    """Add an investigation entry."""
     try:
         note_id = f"note_{uuid.uuid4().hex[:12]}"
 
@@ -1058,16 +949,16 @@ def handle_research_add_note(topic: str, title: str, content: str, tags: list = 
         db.table("knowledge.research_notes").insert(note).execute()
 
         return ResponseEnvelope.success(
-            f"Added research note: {title}",
+            f"Added investigation entry: {title}",
             {"note_id": note_id}
         )
     except Exception as e:
-        logger.error(f"Error adding research note: {e}")
+        logger.error(f"Error adding investigation entry: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_research_list_notes(topic: str = None) -> dict:
-    """List research notes."""
+def handle_investigation_list(topic: str = None) -> dict:
+    """List investigations."""
     try:
         query = db.table("knowledge.research_notes")\
             .select("note_id, topic, title, tags, created_at")\
@@ -1079,16 +970,16 @@ def handle_research_list_notes(topic: str = None) -> dict:
         result = query.limit(100).execute()
 
         return ResponseEnvelope.success(
-            f"Found {len(result.data)} notes",
-            {"notes": result.data, "count": len(result.data)}
+            f"Found {len(result.data)} investigations",
+            {"investigations": result.data, "count": len(result.data)}
         )
     except Exception as e:
-        logger.error(f"Error listing research notes: {e}")
+        logger.error(f"Error listing investigations: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_research_get_note(note_id: str) -> dict:
-    """Get research note."""
+def handle_investigation_get(note_id: str) -> dict:
+    """Get a single investigation entry."""
     try:
         result = db.table("knowledge.research_notes")\
             .select("*")\
@@ -1097,69 +988,21 @@ def handle_research_get_note(note_id: str) -> dict:
             .execute()
 
         if not result or not result.data:
-            return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"Note not found: {note_id}")
+            return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"Investigation not found: {note_id}")
 
         return ResponseEnvelope.success(
-            f"Note: {result.data['title']}",
+            f"Investigation: {result.data['title']}",
             result.data
         )
     except Exception as e:
-        logger.error(f"Error getting research note: {e}")
+        logger.error(f"Error getting investigation: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_research_add_source(title: str, kind: str, url: str = None,
-                               authors: list = None, year: int = None, notes: str = None) -> dict:
-    """Add research source."""
-    try:
-        source_id = f"src_{uuid.uuid4().hex[:12]}"
-
-        source = {
-            "source_id": source_id,
-            "title": title,
-            "kind": kind,
-            "url": url,
-            "authors": authors or [],
-            "year": year,
-            "notes": notes
-        }
-
-        db.table("knowledge.research_sources").insert(source).execute()
-
-        return ResponseEnvelope.success(
-            f"Added source: {title}",
-            {"source_id": source_id}
-        )
-    except Exception as e:
-        logger.error(f"Error adding research source: {e}")
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
-
-
-def handle_research_list_sources(kind: str = None) -> dict:
-    """List research sources."""
-    try:
-        query = db.table("knowledge.research_sources")\
-            .select("source_id, title, kind, authors, year")\
-            .order("created_at", desc=True)
-
-        if kind:
-            query = query.eq("kind", kind)
-
-        result = query.limit(100).execute()
-
-        return ResponseEnvelope.success(
-            f"Found {len(result.data)} sources",
-            {"sources": result.data, "count": len(result.data)}
-        )
-    except Exception as e:
-        logger.error(f"Error listing research sources: {e}")
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
-
-
-def handle_research_log_experiment(title: str, hypothesis: str = None,
-                                   methodology: str = None, results: dict = None,
-                                   conclusion: str = None) -> dict:
-    """Log experiment."""
+def handle_investigation_log_experiment(title: str, hypothesis: str = None,
+                                        methodology: str = None, results: dict = None,
+                                        conclusion: str = None) -> dict:
+    """Log an experiment within an investigation."""
     try:
         experiment_id = f"exp_{uuid.uuid4().hex[:12]}"
 
@@ -1175,16 +1018,16 @@ def handle_research_log_experiment(title: str, hypothesis: str = None,
         db.table("knowledge.research_experiments").insert(experiment).execute()
 
         return ResponseEnvelope.success(
-            f"Logged experiment: {title}",
+            f"Logged investigation experiment: {title}",
             {"experiment_id": experiment_id}
         )
     except Exception as e:
-        logger.error(f"Error logging experiment: {e}")
+        logger.error(f"Error logging investigation experiment: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_research_list_experiments() -> dict:
-    """List experiments."""
+def handle_investigation_list_experiments() -> dict:
+    """List investigation experiments."""
     try:
         result = db.table("knowledge.research_experiments")\
             .select("experiment_id, title, created_at")\
@@ -1193,33 +1036,11 @@ def handle_research_list_experiments() -> dict:
             .execute()
 
         return ResponseEnvelope.success(
-            f"Found {len(result.data)} experiments",
+            f"Found {len(result.data)} investigation experiments",
             {"experiments": result.data, "count": len(result.data)}
         )
     except Exception as e:
-        logger.error(f"Error listing experiments: {e}")
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
-
-
-def handle_research_link_source_to_experiment(source_id: str, experiment_id: str) -> dict:
-    """Link source to experiment."""
-    try:
-        link_id = f"link_{uuid.uuid4().hex[:12]}"
-
-        link = {
-            "link_id": link_id,
-            "source_id": source_id,
-            "experiment_id": experiment_id
-        }
-
-        db.table("knowledge.research_source_links").insert(link).execute()
-
-        return ResponseEnvelope.success(
-            f"Linked source {source_id} to experiment {experiment_id}",
-            {"link_id": link_id}
-        )
-    except Exception as e:
-        logger.error(f"Error linking source to experiment: {e}")
+        logger.error(f"Error listing investigation experiments: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
@@ -1681,60 +1502,6 @@ def handle_kb_sync_status(dir_path: str) -> dict:
 
     except Exception as e:
         logger.error(f"Error checking sync status: {e}", exc_info=True)
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
-
-
-def handle_kb_link_to_source(kb_id: str) -> dict:
-    """Get source document reference for a KB entry."""
-    try:
-        # Get KB entry
-        entry = supabase.table("kb_entries")\
-            .select("*")\
-            .eq("kb_id", kb_id)\
-            .maybe_single()\
-            .execute()
-
-        if not entry or not entry.data:
-            return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"KB entry not found: {kb_id}")
-
-        source_doc = entry.data.get('source_doc')
-        if not source_doc:
-            return ResponseEnvelope.success(
-                f"KB entry {kb_id} has no source document",
-                {
-                    "kb_id": kb_id,
-                    "source_doc": None,
-                    "source_section": None,
-                    "line_range": None,
-                    "last_synced": None,
-                    "doc_exists": False
-                }
-            )
-
-        # Get sync record
-        sync_rec = db.table("knowledge.kb_doc_sync")\
-            .select("*")\
-            .eq("doc_path", source_doc)\
-            .maybe_single()\
-            .execute()
-
-        # Check if source file still exists
-        doc_exists = Path(source_doc).exists()
-
-        return ResponseEnvelope.success(
-            f"Source: {Path(source_doc).name}",
-            {
-                "kb_id": kb_id,
-                "source_doc": source_doc,
-                "source_section": entry.data.get('source_section'),
-                "line_range": entry.data.get('line_range'),
-                "last_synced": sync_rec.data.get('last_synced_at') if sync_rec and sync_rec.data else None,
-                "doc_exists": doc_exists
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"Error linking KB to source: {e}", exc_info=True)
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
@@ -2206,205 +1973,6 @@ def main():
             await app.run(read_stream, write_stream, app.create_initialization_options())
 
     asyncio.run(_run())
-
-
-# =============================================================================
-# Knowledge Graph Handlers
-# =============================================================================
-
-def get_db_connection():
-    """Get direct PostgreSQL connection for kg_ operations."""
-    return psycopg2.connect(
-        host=os.getenv('DB_HOST', '192.168.1.12'),
-        port=int(os.getenv('DB_PORT', 5432)),
-        database=os.getenv('DB_NAME', 'mmp_system'),
-        user=os.getenv('DB_USER', 'latvian_user'),
-        password=os.getenv('DB_PASSWORD', 'latvian_dev_password_2026')
-    )
-
-def handle_kg_add_node(label: str, kind: str, properties: dict = None) -> dict:
-    """Add KG node."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        node_id = f"node_{uuid.uuid4().hex[:12]}"
-
-        cur.execute("""
-            INSERT INTO knowledge.kg_nodes (node_id, label, kind, properties, created_at)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (
-            node_id,
-            label,
-            kind,
-            json.dumps(properties or {}),
-            datetime.now()
-        ))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return ResponseEnvelope.success(
-            f"Added KG node: {label}",
-            {"node_id": node_id, "label": label, "kind": kind}
-        )
-    except Exception as e:
-        logger.error(f"Error adding knowledge graph node: {e}")
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
-
-def handle_kg_add_edge(from_node: str, to_node: str, relation: str, properties: dict = None) -> dict:
-    """Add KG edge."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        edge_id = f"edge_{uuid.uuid4().hex[:12]}"
-
-        cur.execute("""
-            INSERT INTO knowledge.kg_edges (edge_id, from_node, to_node, relation, properties, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (
-            edge_id,
-            from_node,
-            to_node,
-            relation,
-            json.dumps(properties or {}),
-            datetime.now()
-        ))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return ResponseEnvelope.success(
-            f"Added edge: {from_node} --[{relation}]--> {to_node}",
-            {"edge_id": edge_id, "from_node": from_node, "to_node": to_node, "relation": relation}
-        )
-    except Exception as e:
-        logger.error(f"Error adding knowledge graph edge: {e}")
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
-
-def handle_kg_get_node(node_id: str) -> dict:
-    """Get KG node."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT node_id, label, kind, properties, created_at
-            FROM knowledge.kg_nodes WHERE node_id = %s
-        """, (node_id,))
-
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-
-        if result:
-            node_id, label, kind, properties, created_at = result
-            return ResponseEnvelope.success(
-                f"Found node: {label}",
-                {
-                    "node_id": node_id,
-                    "label": label,
-                    "kind": kind,
-                    "properties": properties if isinstance(properties, dict) else (json.loads(properties) if properties else {}),
-                    "created_at": created_at.isoformat() if created_at else None
-                }
-            )
-        else:
-            return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"Node not found: {node_id}")
-
-    except Exception as e:
-        logger.error(f"Error getting knowledge graph node: {e}")
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
-
-def handle_kg_neighbors(node_id: str) -> dict:
-    """Get neighboring nodes."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Get outgoing edges
-        cur.execute("""
-            SELECT e.edge_id, e.relation, n.node_id, n.label, n.kind
-            FROM knowledge.kg_edges e
-            JOIN knowledge.kg_nodes n ON e.to_node = n.node_id
-            WHERE e.from_node = %s
-        """, (node_id,))
-
-        outgoing = cur.fetchall()
-
-        # Get incoming edges
-        cur.execute("""
-            SELECT e.edge_id, e.relation, n.node_id, n.label, n.kind
-            FROM knowledge.kg_edges e
-            JOIN knowledge.kg_nodes n ON e.from_node = n.node_id
-            WHERE e.to_node = %s
-        """, (node_id,))
-
-        incoming = cur.fetchall()
-
-        cur.close()
-        conn.close()
-
-        neighbors = {
-            "outgoing": [{"edge_id": e[0], "relation": e[1], "node": {"node_id": e[2], "label": e[3], "kind": e[4]}} for e in outgoing],
-            "incoming": [{"edge_id": e[0], "relation": e[1], "node": {"node_id": e[2], "label": e[3], "kind": e[4]}} for e in incoming]
-        }
-
-        return ResponseEnvelope.success(
-            f"Found {len(outgoing)} outgoing and {len(incoming)} incoming neighbors",
-            neighbors
-        )
-
-    except Exception as e:
-        logger.error(f"Error exploring knowledge graph neighbors: {e}")
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
-
-def handle_kg_search(query: str, kind: str = None) -> dict:
-    """Search KG nodes."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        if kind:
-            cur.execute("""
-                SELECT node_id, label, kind, properties
-                FROM knowledge.kg_nodes
-                WHERE label ILIKE %s AND kind = %s
-                ORDER BY label
-            """, (f"%{query}%", kind))
-        else:
-            cur.execute("""
-                SELECT node_id, label, kind, properties
-                FROM knowledge.kg_nodes
-                WHERE label ILIKE %s
-                ORDER BY label
-            """, (f"%{query}%",))
-
-        results = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        nodes = []
-        for result in results:
-            node_id, label, kind, properties = result
-            nodes.append({
-                "node_id": node_id,
-                "label": label,
-                "kind": kind,
-                "properties": properties if isinstance(properties, dict) else (json.loads(properties) if properties else {})
-            })
-
-        return ResponseEnvelope.success(
-            f"Found {len(nodes)} nodes matching '{query}'",
-            {"nodes": nodes, "count": len(nodes)}
-        )
-
-    except Exception as e:
-        logger.error(f"Error searching knowledge graph: {e}")
-        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
 if __name__ == "__main__":

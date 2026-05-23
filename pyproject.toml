@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "knowledge-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "Unified knowledge management MCP server with document intelligence and research workflows"
 readme = "README.md"
 license = {file = "LICENSE"}

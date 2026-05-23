@@ -1,316 +1,280 @@
-# 🧠 Knowledge MCP Server
+# Lore
 
-**Unified Knowledge Management for Claude Code** - The most comprehensive MCP server for knowledge base, research workflows, and document intelligence.
+**The operational knowledge layer for engineers and their AI agents.**
 
-![Version](https://img.shields.io/badge/version-0.3.0-blue)
-![Python](https://img.shields.io/badge/python-3.11+-green)
-![MCP](https://img.shields.io/badge/MCP-compatible-purple)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-blue)
-![Supabase](https://img.shields.io/badge/Supabase-ready-green)
-
-## 🚀 Why Knowledge-MCP?
-
-Unlike basic knowledge base MCPs that only store and retrieve documents, **Knowledge-MCP** is a **unified knowledge ecosystem** that transforms how Claude Code agents work with information:
-
-```
-Traditional KB MCP:     Knowledge-MCP:
-┌─────────────┐        ┌─────────────────────────────────┐
-│   Store     │        │  KB + Research + Journal        │
-│   Search    │   →    │  + Document Intelligence        │
-│   Retrieve  │        │  + Auto-sync + Link tracking    │
-└─────────────┘        └─────────────────────────────────┘
-```
-
-### 🌟 Unified Architecture
-
-**Four Systems, One Server:**
-- **📚 Knowledge Base** - Structured document storage with semantic search
-- **🔬 Research Workflows** - Notes, sources, experiments with linking
-- **📖 Journal System** - Decision logs and configuration snapshots
-- **🔍 Document Intelligence** - Auto-ingestion, change detection, bidirectional linking
-
-### 🎯 Key Advantages
-
-| Feature | Traditional KB MCPs | Knowledge-MCP |
-|---------|-------------------|---------------|
-| **Storage** | Single documents | Structured knowledge + relationships |
-| **Research** | Basic search | Full research workflow with experiments |
-| **Sync** | Manual updates | Auto-detection with SHA-256 hashing |
-| **Linking** | Text references | Bidirectional source ↔ KB linking |
-| **Backends** | Single option | PostgreSQL + Supabase + SQLite |
-| **Intelligence** | Static storage | Document ingestion with chunking strategies |
-
-## ⚡ Quick Start
-
-### 1. Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/your-username/knowledge-mcp.git
-cd knowledge-mcp
-
-# Install with PostgreSQL support
-pip install -e .
-
-# Or install from PyPI (coming soon)
-pip install knowledge-mcp
-```
-
-### 2. Backend Setup
-
-**Option A: PostgreSQL + pgvector (Recommended)**
-```bash
-# Run setup script
-./scripts/setup-postgres.sh
-
-# Configure environment
-cp .env.example .env
-# Edit DATABASE_URL in .env
-```
-
-**Option B: Supabase (Cloud)**
-```bash
-# Get credentials from Supabase dashboard
-cp .env.example .env
-# Edit SUPABASE_URL and SUPABASE_KEY
-```
-
-**Option C: SQLite (Local Development / Work Machines)**
-```bash
-# No setup needed - auto-creates a single .db file
-export DB_BACKEND=sqlite
-export KNOWLEDGE_DATA_DIR=/path/to/data  # optional, defaults to ./knowledge-data
-```
-
-### 3. Claude Code Integration
-
-Add to your Claude Code MCP configuration:
-
-**PostgreSQL:**
-```json
-{
-  "mcpServers": {
-    "knowledge-mcp": {
-      "command": "knowledge-mcp",
-      "env": {
-        "DB_BACKEND": "local",
-        "DB_HOST": "localhost",
-        "DB_PORT": "5432",
-        "DB_NAME": "mmp_system",
-        "DB_USER": "your_user",
-        "DB_PASSWORD": "your_password",
-        "KNOWLEDGE_DATA_DIR": "/opt/knowledge-data"
-      }
-    }
-  }
-}
-```
-
-**SQLite (no database server needed):**
-```json
-{
-  "mcpServers": {
-    "knowledge-mcp": {
-      "command": "knowledge-mcp",
-      "env": {
-        "DB_BACKEND": "sqlite",
-        "KNOWLEDGE_DATA_DIR": "/path/to/knowledge-data"
-      }
-    }
-  }
-}
-```
-
-### 4. Start Using
-
-```bash
-# Start the server
-knowledge-mcp
-
-# Or test directly
-python -m knowledge_mcp.server
-```
-
-## 📋 Core Tools
-
-### 📚 Knowledge Base
-```python
-# Add structured knowledge
-kb_add(topic="api-design", title="REST Best Practices", content="...")
-
-# Intelligent search with ranking
-kb_search(query="authentication patterns", limit=10)
-
-# Bulk document ingestion
-kb_ingest_dir(dir_path="/docs", strategy="chunked", recursive=True)
-```
-
-### 🔬 Research Workflows
-```python
-# Research notes with linking
-research_add_note(title="OAuth2 Investigation", content="...", tags=["auth"])
-
-# Track sources and experiments
-research_add_source(url="https://oauth.net/2/", title="OAuth 2.0 Spec")
-research_log_experiment(title="JWT vs Sessions", hypothesis="...", results="...")
-```
-
-### 📖 Journal & Config
-```python
-# Decision logging
-journal_append(content="Decided to use PostgreSQL for better performance")
-
-# Configuration snapshots
-snapshot_config(label="v2.1-release", paths=["/etc/app.conf"])
-```
-
-### 🔍 Document Intelligence
-```python
-# Auto-sync with change detection
-kb_sync_status(dir_path="/docs")  # Check what's changed
-kb_ingest_dir(dir_path="/docs")   # Auto-update only changed files
-
-# Bidirectional linking
-kb_link_to_source(kb_id="kb_123")  # Find source document
-```
-
-## 🏗️ Architecture
-
-### Multi-Backend Design
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   PostgreSQL    │    │    Supabase     │    │    SQLite       │
-│   (Recommended) │    │   (Cloud)       │    │   (Local Dev)   │
-│                 │    │                 │    │                 │
-│ • Best perf     │    │ • Zero setup    │    │ • No server     │
-│ • Full features │    │ • Managed       │    │ • Single file   │
-│ • Self-hosted   │    │ • Scalable      │    │ • Portable      │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-        │                       │                       │
-        └───────────────────────┼───────────────────────┘
-                                │
-                    ┌─────────────────────┐
-                    │   Knowledge MCP     │
-                    │   Unified Interface │
-                    └─────────────────────┘
-```
-
-### Document Intelligence Pipeline
-
-```
-📄 Source Documents
-        │
-        ▼
-┌─────────────────┐
-│ Change Detection│  ← SHA-256 hashing
-│ (Skip if same)  │
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│ Content Parser  │  ← Frontmatter + Markdown
-│ (Extract meta)  │
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│ Chunking Engine │  ← Smart section splitting
-│ (Headers/tokens)│
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│ KB Storage +    │  ← Bidirectional links
-│ Link Tracking   │
-└─────────────────┘
-```
-
-## 🛠️ Advanced Features
-
-### Intelligent Document Processing
-
-- **Smart Chunking**: Automatically splits documents by headers and token limits
-- **Change Detection**: SHA-256 hashing prevents unnecessary reprocessing
-- **Frontmatter Support**: Extract metadata from YAML headers
-- **Bidirectional Linking**: Navigate from KB entries back to source files
-
-### Research Workflow Integration
-
-- **Source Management**: Track URLs, papers, and references
-- **Experiment Logging**: Hypothesis → Results → Conclusions
-- **Cross-Linking**: Connect notes to sources and experiments
-- **Tag-based Organization**: Flexible categorization system
-
-### Performance & Reliability
-
-- **Concurrent Processing**: Parallel document ingestion
-- **Connection Pooling**: Efficient database connections
-- **Error Recovery**: Graceful handling of individual failures
-- **Incremental Sync**: Only process changed documents
-
-## 📖 Documentation
-
-| Document | Description |
-|----------|-------------|
-| **[Installation Guide](INSTALLATION.md)** | Detailed setup for all backends |
-| **[Claude Integration](CLAUDE_INTEGRATION.md)** | MCP configuration and usage patterns |
-| **[API Reference](API_REFERENCE.md)** | Complete tool documentation |
-| **[Architecture Guide](ARCHITECTURE.md)** | Technical implementation details |
-| **[Benefits Analysis](BENEFITS.md)** | Comparison with other solutions |
-
-## 🚀 Performance
-
-**Benchmarks vs. Basic KB MCPs:**
-
-| Operation | Basic KB MCP | Knowledge-MCP |
-|-----------|--------------|---------------|
-| Document Search | 200ms | 50ms (PostgreSQL) |
-| Bulk Ingestion | No support | 10 docs/second |
-| Change Detection | Full reprocess | Skip unchanged (1ms) |
-| Cross-References | Manual | Automatic bidirectional |
-
-## 🌍 Use Cases
-
-### 🏢 Enterprise Documentation
-- Automatically sync company wikis and documentation
-- Track research and decision-making processes
-- Maintain configuration audit trails
-
-### 🔬 Research Projects
-- Manage research notes, sources, and experiments
-- Link findings across multiple investigations
-- Track hypothesis evolution and results
-
-### 💻 Development Teams
-- Auto-sync code documentation and ADRs
-- Journal architectural decisions
-- Maintain knowledge base of patterns and solutions
-
-### 🎓 Personal Knowledge Management
-- Process and organize personal notes and articles
-- Track learning progress and experiments
-- Build interconnected knowledge graphs
-
-## 🤝 Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
-
-- Development setup instructions
-- Code style guidelines
-- Testing procedures
-- Pull request process
-
-## 📜 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## 🆘 Support
-
-- **Issues**: [GitHub Issues](https://github.com/your-username/knowledge-mcp/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-username/knowledge-mcp/discussions)
-- **Documentation**: [Full Documentation](docs/)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/davidgut1982/advanced-knowledge-mcp)
+[![Python](https://img.shields.io/badge/python-3.11+-green)](https://python.org)
+[![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-blue)](https://postgresql.org)
 
 ---
 
-**Built for Claude Code** • **Powered by MCP** • **Optimized for Intelligence**
+## The Problem
+
+Your AI agents are smart. But they start every session operationally blind.
+
+They don't know how your infrastructure is built. They don't know why you made that architecture decision six months ago. They don't know what broke last time and how you fixed it. They don't know which engineer — or which agent — wrote that runbook, or whether it's been verified.
+
+Every session, they start from zero.
+
+**Lore fixes that.**
+
+---
+
+## What Lore Is
+
+Lore is a persistent operational knowledge layer your entire team — humans and AI agents — shares and queries.
+
+It's not a personal second brain. It's not conversation history. It's not a document store for humans to browse.
+
+It's the **lore of your stack**: how things work, why decisions were made, and what happened when things broke — structured so AI agents can query it instantly and act on it correctly.
+
+```
+Without Lore:                    With Lore:
+─────────────────                ──────────────────────────────────
+Agent session starts             Agent queries Lore on startup
+"How does our infra work?"       Gets: topology, gotchas, runbooks,
+You re-explain everything        recent incidents, verified decisions
+Session ends, context lost       Knowledge persists across all sessions
+                                 Next agent starts informed
+```
+
+---
+
+## Three Things Lore Does
+
+### 1. Knowledge Base
+
+The core. Structured operational knowledge your agents query in real time.
+
+```python
+# Capture a hard-won gotcha
+kb_add(
+    topic="pfsense",
+    title="HAProxy load-server-state-from-file overrides cfg changes on reload",
+    content="If load-server-state-from-file is enabled, a HAProxy reload will restore...",
+    tags=["pfsense", "haproxy", "gotcha"],
+    author="david",
+    source_type="human",
+)
+
+# Agent queries before touching HAProxy
+kb_search(query="HAProxy reload behavior")
+# Returns the gotcha entry instantly
+```
+
+Every entry carries **attribution** — who wrote it (human or agent name), what type of source it is, and whether it's been human-verified. In a multi-agent system, your agents know the difference between:
+
+- A runbook written and verified by a senior engineer
+- A deployment note written by an agent, unreviewed
+- An auto-captured system state entry (reference only)
+
+### 2. Investigations
+
+Structured ops debugging with a paper trail. When something breaks, you don't want scattered notes — you want a traceable trail from symptom to root cause to resolution.
+
+```python
+# Open an investigation
+investigation_add(
+    topic="anki-media-loading",
+    title="Anki Media Loading Root Cause Analysis",
+    content="Symptom: media files not loading after container restart. "
+            "Hypothesis: mount collision between container volumes...",
+    tags=["anki", "docker", "urgent"],
+)
+
+# Log the experiment
+investigation_log_experiment(
+    title="Mount collision test",
+    hypothesis="Overlapping volume mounts cause file descriptor exhaustion",
+    methodology="Reproduced with minimal compose config, isolated variables",
+    results={"fd_count": 1024, "collision": True, "resolution": "Remove duplicate mount"},
+    conclusion="Confirmed. Fix: remove /data volume from service B.",
+)
+
+# Final resolution entry
+investigation_add(
+    topic="anki-media-loading",
+    title="RESOLVED: Anki Media Loading Fix",
+    content="Root cause was mount collision. Fix verified in production.",
+    tags=["anki", "resolved"],
+)
+```
+
+Next time a similar issue happens — six months later, different engineer — the investigation trail is there.
+
+### 3. Journal
+
+Major milestones and inflection points. Architecture decisions. Buying decisions. Things you want a permanent record of.
+
+```python
+journal_append(
+    entry_type="milestone",
+    content="Migrated monitoring stack from latvian-vm to ops bastion. "
+            "Rationale: centralized visibility, reduced per-VM overhead. "
+            "All Grafana dashboards updated.",
+    tags=["monitoring", "migration", "bastion"],
+)
+```
+
+---
+
+## Attribution: Built for Multi-Agent Systems
+
+In a multi-agent environment, provenance matters. Lore tracks who wrote what.
+
+```
+kb_search("proxmox lxc networking")
+
+Results:
+  [1] "Proxmox LXC inherits host resolv.conf — Tailscale breaks containers"
+      author: david | source_type: human | verified: true
+
+  [2] "LXC container DNS fix after Tailscale install"
+      author: engineer-agent | source_type: agent | verified: null
+
+  [3] "LXC DNS configuration reference"
+      author: research-agent | source_type: agent | verified: false
+```
+
+Your agents understand: trust level 1 is production-safe. Trust level 2, spot-check before acting. Trust level 3, do not follow without review.
+
+---
+
+## Quick Start
+
+### Solo / Local (SQLite — no server needed)
+
+```bash
+git clone https://github.com/davidgut1982/advanced-knowledge-mcp.git
+cd advanced-knowledge-mcp
+pip install -e .
+
+export DB_BACKEND=sqlite
+export KNOWLEDGE_DATA_DIR=~/.lore
+
+knowledge-mcp  # starts on stdio
+```
+
+Add to Claude Code:
+```json
+{
+  "mcpServers": {
+    "lore": {
+      "command": "knowledge-mcp",
+      "env": {
+        "DB_BACKEND": "sqlite",
+        "KNOWLEDGE_DATA_DIR": "/home/yourname/.lore"
+      }
+    }
+  }
+}
+```
+
+### Team / Shared (PostgreSQL)
+
+```bash
+# On your server / LXC:
+git clone https://github.com/davidgut1982/advanced-knowledge-mcp.git
+cd advanced-knowledge-mcp
+pip install -e .
+
+# Set up PostgreSQL (or use docker-compose)
+docker-compose up -d postgres
+
+export DB_BACKEND=local
+export DB_HOST=localhost
+export DB_PORT=5432
+export DB_NAME=lore
+export DB_USER=lore_user
+export DB_PASSWORD=yourpassword
+
+knowledge-mcp --host 0.0.0.0 --port 5555
+```
+
+All agents on your team point at `http://your-server:5555/mcp`. One shared knowledge layer.
+
+---
+
+## Tool Reference
+
+### Knowledge Base
+| Tool | What it does |
+|---|---|
+| `kb_add` | Add an entry. Accepts `author`, `source_type` for attribution. |
+| `kb_search` | Semantic search with optional topic filter. |
+| `kb_get` | Fetch full entry by ID. |
+| `kb_list` | List entries, filter by topic. |
+| `kb_update` | Update content, tags, or set `verified` flag. |
+| `kb_delete` | Delete entry (requires `confirm=true`). |
+
+### Investigations
+| Tool | What it does |
+|---|---|
+| `investigation_add` | Open or add to an investigation (topic, title, content, tags). |
+| `investigation_list` | List investigations, filter by topic. |
+| `investigation_get` | Fetch full investigation by ID. |
+| `investigation_log_experiment` | Log a structured experiment with hypothesis, methodology, results, conclusion. |
+| `investigation_list_experiments` | List all logged experiments. |
+
+### Journal
+| Tool | What it does |
+|---|---|
+| `journal_append` | Add a milestone, decision, or reflection. |
+| `journal_list` | List recent entries (default 20). |
+| `journal_get` | Fetch entry by ID. |
+| `snapshot_config` | Snapshot a config object to the journal. |
+
+### Document Ingestion
+| Tool | What it does |
+|---|---|
+| `kb_ingest_doc` | Ingest a markdown file into the KB. |
+| `kb_ingest_dir` | Batch-ingest a directory, with change detection. |
+| `kb_sync_status` | Check what's changed since last sync. |
+
+### MCP Index
+| Tool | What it does |
+|---|---|
+| `mcp_index_scan` | Scan all configured MCP servers and index their tools. |
+| `mcp_index_search` | Search indexed tools by description. |
+| `mcp_index_get_server` | Get all tools for a specific MCP server. |
+| `mcp_index_rebuild` | Force a full rescan. |
+
+### Search
+| Tool | What it does |
+|---|---|
+| `kb_search` | Search the knowledge base. |
+| `multi_search` | Search across KB, investigations, journal, and transcripts at once. |
+| `search_local` | Search local files by content. |
+| `search_transcripts` | Search Whisper transcript segments. |
+| `deduplicate_results` | Deduplicate a result set by similarity. |
+| `cluster_results` | Cluster results by topic. |
+
+---
+
+## Backends
+
+| Backend | Use case | Setup |
+|---|---|---|
+| SQLite | Solo / local dev / single machine | No server, one env var |
+| PostgreSQL | Team / shared / production | Self-hosted DB |
+| Supabase | Cloud PostgreSQL | Managed, zero-ops |
+
+---
+
+## How It's Different
+
+| Tool | Built for | What it remembers | Agent-native |
+|---|---|---|---|
+| OB1 / personal memory | One person | Your thoughts and captures | No |
+| Mem0 / Zep | App developers | User preferences, conversations | Partially |
+| Confluence / Notion | Human teams | Documentation (human-browsed) | No |
+| **Lore** | **Engineering teams + AI agents** | **How your systems work** | **Yes** |
+
+Lore is not a second brain. It's the operational intelligence layer your agents need to work in your environment — not just any environment.
+
+---
+
+## Version
+
+`0.4.0` — Lore rebrand. Stripped to three focused systems (KB, Investigations, Journal). Added attribution model (author, source_type, verified). Removed knowledge graph and source tracking.
