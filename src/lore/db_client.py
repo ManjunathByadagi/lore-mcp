@@ -401,11 +401,10 @@ class TableQuery:
             # Dicts are serialized to JSONB
             return json.dumps(value)
         elif isinstance(value, list):
-            # psycopg2 natively handles Python lists as PostgreSQL arrays
-            # No need to use adapt() - just pass the list directly
-            # Python [] -> PostgreSQL ARRAY[]::text[]
-            # Python ['a', 'b'] -> PostgreSQL ARRAY['a', 'b']
-            return value
+            # Serialize to JSON string for JSONB columns (tags column is JSONB)
+            # psycopg2 would encode Python lists as text[] which conflicts with jsonb type
+            import json
+            return json.dumps(value)
         return value
 
     def _execute_insert(self, cursor) -> QueryResult:
@@ -563,7 +562,10 @@ CREATE TABLE IF NOT EXISTS knowledge_kb_entries (
     source_doc TEXT,
     source_section TEXT,
     line_range TEXT,
-    tags TEXT DEFAULT '[]'
+    tags TEXT DEFAULT '[]',
+    author TEXT,
+    source_type TEXT,
+    verified INTEGER
 );
 CREATE TABLE IF NOT EXISTS knowledge_research_notes (
     note_id TEXT PRIMARY KEY,

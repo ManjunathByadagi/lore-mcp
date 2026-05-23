@@ -169,6 +169,13 @@ def _coerce_arguments(arguments: dict, schema: dict) -> dict:
                     coerced[field] = parsed
             except (json.JSONDecodeError, ValueError):
                 pass  # Leave the value as-is; jsonschema will report the error
+        elif expected_type == "boolean" and isinstance(value, str):
+            lower = value.strip().lower()
+            if lower in ("true", "1", "yes"):
+                coerced[field] = True
+            elif lower in ("false", "0", "no"):
+                coerced[field] = False
+            # else: leave as-is; jsonschema validation will catch invalid values
     return coerced
 
 
