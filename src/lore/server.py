@@ -2123,8 +2123,7 @@ def main() -> None:
     parser.add_argument(
         "--host",
         default=None,
-        help="Bind address for HTTP/SSE mode (e.g. 0.0.0.0). "
-        "Omit for stdio mode.",
+        help="Bind address for HTTP/SSE mode (e.g. 0.0.0.0). Omit for stdio mode.",
     )
     parser.add_argument(
         "--port",
@@ -2151,9 +2150,9 @@ def main() -> None:
 
     if args.host is not None or args.port is not None:
         # HTTP/SSE mode — delegate to the wrapper, which mounts our 'app'.
-        from .mcp_http_wrapper_sse import create_app
-
         import uvicorn
+
+        from .mcp_http_wrapper_sse import create_app
 
         host = args.host or "127.0.0.1"
         port = args.port or 5555
@@ -2166,9 +2165,7 @@ def main() -> None:
 
     async def _run() -> None:
         async with stdio_server() as (read_stream, write_stream):
-            await app.run(
-                read_stream, write_stream, app.create_initialization_options()
-            )
+            await app.run(read_stream, write_stream, app.create_initialization_options())
 
     asyncio.run(_run())
 
