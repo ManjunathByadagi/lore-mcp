@@ -9,7 +9,7 @@ from pathlib import Path
 @pytest.fixture(scope="session")
 def temp_test_dir():
     """Create a temporary directory for the test session."""
-    with tempfile.TemporaryDirectory(prefix="knowledge_mcp_test_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="lore_test_") as temp_dir:
         yield Path(temp_dir)
 
 

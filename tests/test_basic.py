@@ -7,14 +7,14 @@ from pathlib import Path
 
 
 def test_import():
-    """Test that the knowledge_mcp module can be imported."""
-    import knowledge_mcp
-    assert knowledge_mcp is not None
+    """Test that the lore module can be imported."""
+    import lore
+    assert lore is not None
 
 
 def test_server_import():
     """Test that the server module can be imported."""
-    from knowledge_mcp import server
+    from lore import server
     assert server is not None
 
 
@@ -31,7 +31,7 @@ def test_json_backend_basic(temp_data_dir):
     os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
 
     # Import after setting environment
-    from knowledge_mcp.server import KnowledgeMCPServer
+    from lore.server import KnowledgeMCPServer
 
     # Create server instance
     server = KnowledgeMCPServer()
@@ -44,9 +44,9 @@ def test_json_backend_basic(temp_data_dir):
 
 def test_version():
     """Test that version information is available."""
-    import knowledge_mcp
+    import lore
     # Basic check that version info exists
-    assert hasattr(knowledge_mcp, '__version__') or True  # May not be set in dev
+    assert hasattr(lore, '__version__') or True  # May not be set in dev
 
 
 class TestKnowledgeOperations:
@@ -56,7 +56,7 @@ class TestKnowledgeOperations:
         """Test that kb_add has proper structure."""
         os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
 
-        from knowledge_mcp.server import KnowledgeMCPServer
+        from lore.server import KnowledgeMCPServer
         server = KnowledgeMCPServer()
 
         # Check that method exists and is callable
@@ -67,7 +67,7 @@ class TestKnowledgeOperations:
         """Test that kb_search has proper structure."""
         os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
 
-        from knowledge_mcp.server import KnowledgeMCPServer
+        from lore.server import KnowledgeMCPServer
         server = KnowledgeMCPServer()
 
         # Check that method exists and is callable
@@ -82,7 +82,7 @@ class TestResearchOperations:
         """Test that research methods exist."""
         os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
 
-        from knowledge_mcp.server import KnowledgeMCPServer
+        from lore.server import KnowledgeMCPServer
         server = KnowledgeMCPServer()
 
         # Check research methods
@@ -104,7 +104,7 @@ class TestJournalOperations:
         """Test that journal methods exist."""
         os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_data_dir)
 
-        from knowledge_mcp.server import KnowledgeMCPServer
+        from lore.server import KnowledgeMCPServer
         server = KnowledgeMCPServer()
 
         # Check journal methods
@@ -130,7 +130,7 @@ class TestDatabaseIntegration:
         """Test database connection."""
         os.environ['DATABASE_URL'] = os.getenv('TEST_DATABASE_URL')
 
-        from knowledge_mcp.server import KnowledgeMCPServer
+        from lore.server import KnowledgeMCPServer
         server = KnowledgeMCPServer()
 
         # If we get here without error, database connection is working

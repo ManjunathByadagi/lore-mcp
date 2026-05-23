@@ -19,15 +19,15 @@ from unittest.mock import Mock, patch, MagicMock
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from knowledge_mcp.server import handle_mcp_index_search
+from lore.server import handle_mcp_index_search
 
 
 class TestMCPIndexAutoReindex:
     """Test automatic re-indexing on empty search results."""
 
-    @patch('knowledge_mcp.server.supabase')
-    @patch('knowledge_mcp.server.MCPIndexScanner')
-    @patch('knowledge_mcp.server.threading')
+    @patch('lore.server.supabase')
+    @patch('lore.server.MCPIndexScanner')
+    @patch('lore.server.threading')
     def test_empty_results_stale_index_triggers_reindex(self, mock_threading, mock_scanner_class, mock_supabase):
         """Test that empty results + stale index triggers background re-index."""
 
@@ -62,9 +62,9 @@ class TestMCPIndexAutoReindex:
         # Verify it's a daemon thread (non-blocking)
         assert mock_threading.Thread.call_args[1]["daemon"] is True
 
-    @patch('knowledge_mcp.server.supabase')
-    @patch('knowledge_mcp.server.MCPIndexScanner')
-    @patch('knowledge_mcp.server.threading')
+    @patch('lore.server.supabase')
+    @patch('lore.server.MCPIndexScanner')
+    @patch('lore.server.threading')
     def test_empty_results_fresh_index_no_reindex(self, mock_threading, mock_scanner_class, mock_supabase):
         """Test that empty results + fresh index does NOT trigger re-index."""
 
@@ -90,9 +90,9 @@ class TestMCPIndexAutoReindex:
         # Verify NO background thread was started
         mock_threading.Thread.assert_not_called()
 
-    @patch('knowledge_mcp.server.supabase')
-    @patch('knowledge_mcp.server.MCPIndexScanner')
-    @patch('knowledge_mcp.server.threading')
+    @patch('lore.server.supabase')
+    @patch('lore.server.MCPIndexScanner')
+    @patch('lore.server.threading')
     def test_non_empty_results_no_reindex(self, mock_threading, mock_scanner_class, mock_supabase):
         """Test that non-empty results never trigger re-index (even if stale)."""
 
@@ -114,9 +114,9 @@ class TestMCPIndexAutoReindex:
         # Verify NO background thread was started
         mock_threading.Thread.assert_not_called()
 
-    @patch('knowledge_mcp.server.supabase')
-    @patch('knowledge_mcp.server.MCPIndexScanner')
-    @patch('knowledge_mcp.server.threading')
+    @patch('lore.server.supabase')
+    @patch('lore.server.MCPIndexScanner')
+    @patch('lore.server.threading')
     def test_no_scan_history_triggers_initial_scan(self, mock_threading, mock_scanner_class, mock_supabase):
         """Test that empty scan history triggers initial background scan."""
 
@@ -145,8 +145,8 @@ class TestMCPIndexAutoReindex:
         mock_threading.Thread.assert_called_once()
         mock_thread.start.assert_called_once()
 
-    @patch('knowledge_mcp.server.supabase')
-    @patch('knowledge_mcp.server.MCPIndexScanner')
+    @patch('lore.server.supabase')
+    @patch('lore.server.MCPIndexScanner')
     def test_staleness_check_failure_graceful_degradation(self, mock_scanner_class, mock_supabase):
         """Test that staleness check failures don't crash the search."""
 

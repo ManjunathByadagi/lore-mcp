@@ -13,7 +13,7 @@ os.environ['SUPABASE_URL'] = os.getenv('SUPABASE_URL', '')
 os.environ['SUPABASE_KEY'] = os.getenv('SUPABASE_KEY', '')
 os.environ['SENTRY_DSN'] = ''
 
-from knowledge_mcp.mcp_index_scanner import MCPIndexScanner
+from lore.mcp_index_scanner import MCPIndexScanner
 
 
 class MockSupabase:

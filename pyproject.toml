@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "knowledge-mcp"
-version = "0.4.0"
+name = "lore-mcp"
+version = "0.5.0"
 description = "Unified knowledge management MCP server with document intelligence and research workflows"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -65,7 +65,7 @@ test = [
 ]
 
 [project.scripts]
-knowledge-mcp = "knowledge_mcp.server:main"
+lore-mcp = "lore.server:main"
 
 [project.urls]
 Homepage = "https://github.com/your-org/knowledge-mcp"
@@ -77,7 +77,7 @@ Issues = "https://github.com/your-org/knowledge-mcp/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-knowledge_mcp = ["py.typed"]
+lore = ["py.typed"]
 
 [tool.black]
 line-length = 88
@@ -125,7 +125,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["knowledge_mcp"]
+known-first-party = ["lore"]
 
 [tool.ruff.format]
 quote-style = "double"

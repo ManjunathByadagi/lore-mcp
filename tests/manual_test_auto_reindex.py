@@ -22,8 +22,8 @@ os.environ['SUPABASE_URL'] = os.getenv('SUPABASE_URL', 'http://localhost:54321')
 os.environ['SUPABASE_KEY'] = os.getenv('SUPABASE_KEY', 'test-key')
 os.environ['SENTRY_DSN'] = ''  # Disable Sentry
 
-from knowledge_mcp.server import handle_mcp_index_search
-from knowledge_mcp import server as server_module
+from lore.server import handle_mcp_index_search
+from lore import server as server_module
 
 
 def main():
@@ -42,7 +42,7 @@ def main():
     print("-" * 80)
 
     # Mock scanner to return empty results
-    from knowledge_mcp.mcp_index_scanner import MCPIndexScanner
+    from lore.mcp_index_scanner import MCPIndexScanner
     from datetime import datetime, timedelta
     from unittest.mock import patch
 
