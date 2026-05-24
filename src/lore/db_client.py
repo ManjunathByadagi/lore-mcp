@@ -638,7 +638,167 @@ CREATE TABLE IF NOT EXISTS mcp_index_versions (
     last_scanned TEXT,
     tool_count INTEGER DEFAULT 0
 );
+
+-- Semantic search support (Issue #6).
+-- All tables here are optional; absence is tolerated when LORE_SEMANTIC_SEARCH=false.
+
+-- FTS5 contentless virtual table mirroring (title, content) of knowledge_kb_entries.
+-- Triggers below keep it in sync. Falls back to LIKE if FTS5 is unavailable.
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_kb_entries_fts USING fts5(
+    title,
+    content,
+    content='knowledge_kb_entries',
+    content_rowid='rowid',
+    tokenize='porter unicode61'
+);
+
+-- Keep FTS index in sync with knowledge_kb_entries.
+CREATE TRIGGER IF NOT EXISTS knowledge_kb_entries_ai
+AFTER INSERT ON knowledge_kb_entries
+BEGIN
+    INSERT INTO knowledge_kb_entries_fts(rowid, title, content)
+    VALUES (new.rowid, new.title, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_kb_entries_ad
+AFTER DELETE ON knowledge_kb_entries
+BEGIN
+    INSERT INTO knowledge_kb_entries_fts(knowledge_kb_entries_fts, rowid, title, content)
+    VALUES ('delete', old.rowid, old.title, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_kb_entries_au
+AFTER UPDATE ON knowledge_kb_entries
+BEGIN
+    INSERT INTO knowledge_kb_entries_fts(knowledge_kb_entries_fts, rowid, title, content)
+    VALUES ('delete', old.rowid, old.title, old.content);
+    INSERT INTO knowledge_kb_entries_fts(rowid, title, content)
+    VALUES (new.rowid, new.title, new.content);
+END;
+
+-- sqlite-vec vec0 virtual table for 384-d embeddings.
+-- kb_id is FK-like into knowledge_kb_entries (no actual FK on vec0 tables).
+-- We delete vec0 rows AFTER the KB row is gone — see kb_delete handler.
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_kb_vec_embeddings USING vec0(
+    kb_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+
+-- Metadata about each embedding: which model produced it, content hash for staleness.
+CREATE TABLE IF NOT EXISTS knowledge_kb_embedding_meta (
+    kb_id TEXT PRIMARY KEY,
+    model_name TEXT NOT NULL,
+    embedding_dim INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    FOREIGN KEY (kb_id) REFERENCES knowledge_kb_entries(kb_id) ON DELETE CASCADE
+);
 """
+
+
+# Core CREATE TABLE statements without FTS5 / vec0 / triggers.
+# Used as a degradation fallback when SQLite is missing FTS5 or sqlite-vec
+# and LORE_SEMANTIC_SEARCH is not enabled. Keep these statements byte-for-byte
+# identical to the corresponding blocks in _SQLITE_SCHEMA.
+_CORE_SQLITE_STATEMENTS: tuple[str, ...] = (
+    """CREATE TABLE IF NOT EXISTS knowledge_kb_entries (
+        kb_id TEXT PRIMARY KEY,
+        topic TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        source_doc TEXT,
+        source_section TEXT,
+        line_range TEXT,
+        tags TEXT DEFAULT '[]',
+        author TEXT,
+        source_type TEXT,
+        verified INTEGER
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_research_notes (
+        note_id TEXT PRIMARY KEY,
+        topic TEXT,
+        title TEXT,
+        content TEXT NOT NULL,
+        tags TEXT DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_research_sources (
+        source_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        kind TEXT,
+        url TEXT,
+        authors TEXT DEFAULT '[]',
+        year INTEGER,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_research_experiments (
+        experiment_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        hypothesis TEXT,
+        methodology TEXT,
+        results TEXT DEFAULT '{}',
+        conclusion TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_research_source_links (
+        link_id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        experiment_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_journal_entries (
+        entry_id TEXT PRIMARY KEY,
+        date TEXT NOT NULL,
+        entry_type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tags TEXT DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_kb_doc_sync (
+        doc_path TEXT PRIMARY KEY,
+        doc_hash TEXT NOT NULL,
+        kb_ids TEXT DEFAULT '[]',
+        last_synced_at TEXT,
+        last_modified_at TEXT,
+        strategy TEXT,
+        metadata TEXT DEFAULT '{}'
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_kg_nodes (
+        node_id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        kind TEXT,
+        properties TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_kg_edges (
+        edge_id TEXT PRIMARY KEY,
+        from_node TEXT NOT NULL,
+        to_node TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        properties TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )""",
+    """CREATE TABLE IF NOT EXISTS mcp_index_versions (
+        server_name TEXT PRIMARY KEY,
+        version TEXT,
+        last_scanned TEXT,
+        tool_count INTEGER DEFAULT 0
+    )""",
+    """CREATE TABLE IF NOT EXISTS knowledge_kb_embedding_meta (
+        kb_id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        embedding_dim INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        FOREIGN KEY (kb_id) REFERENCES knowledge_kb_entries(kb_id) ON DELETE CASCADE
+    )""",
+)
 
 
 def _sqlite_map_table(name: str) -> str:
@@ -1060,13 +1220,22 @@ class SqliteClient:
         self._sqlite3 = sqlite3
         self._db_path = db_path
         self._conn: Any | None = None
+        # Tracks whether sqlite-vec loaded; consumers (search module) check this
+        # to decide whether the semantic path is available on this connection.
+        self.vec_extension_loaded: bool = False
+        self.fts5_available: bool = False
         # Ensure parent directory exists
         from pathlib import Path
 
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         # Open connection and initialise schema immediately
         self._get_connection()
-        logger.info("SqliteClient initialised at %s", db_path)
+        logger.info(
+            "SqliteClient initialised at %s (vec=%s, fts5=%s)",
+            db_path,
+            self.vec_extension_loaded,
+            self.fts5_available,
+        )
 
     def _get_connection(self):
         """Return (and lazily create) the SQLite connection."""
@@ -1077,18 +1246,133 @@ class SqliteClient:
                 detect_types=self._sqlite3.PARSE_DECLTYPES,
             )
             self._conn.row_factory = self._sqlite3.Row
+            # Try to load sqlite-vec extension *before* schema init so that the
+            # vec0 virtual table in _SQLITE_SCHEMA can be created.
+            self._try_load_vec_extension()
             self._init_schema()
             logger.debug("Opened SQLite connection at %s", self._db_path)
         return self._conn
 
-    def _init_schema(self):
-        """Create all tables if they do not already exist."""
+    def _try_load_vec_extension(self) -> None:
+        """Best-effort sqlite-vec load. Silent failure when semantic is off."""
+        semantic_enabled = os.getenv("LORE_SEMANTIC_SEARCH", "false").strip().lower() == "true"
+        try:
+            self._conn.enable_load_extension(True)
+        except (AttributeError, self._sqlite3.OperationalError) as exc:
+            # SQLite compiled without load-extension support — rare on Linux.
+            if semantic_enabled:
+                logger.error("SQLite extension loading is disabled: %s", exc)
+            else:
+                logger.debug("SQLite extension loading unavailable: %s", exc)
+            return
+
+        try:
+            import sqlite_vec
+        except ImportError as exc:
+            if semantic_enabled:
+                logger.error("sqlite-vec not installed; install '.[semantic]' extra: %s", exc)
+            else:
+                logger.debug("sqlite-vec not installed (semantic disabled): %s", exc)
+            # Re-disable load extension to keep the surface small.
+            try:
+                self._conn.enable_load_extension(False)
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+        try:
+            sqlite_vec.load(self._conn)
+            self.vec_extension_loaded = True
+            logger.debug("sqlite-vec extension loaded")
+        except Exception as exc:  # noqa: BLE001
+            if semantic_enabled:
+                logger.error("Failed to load sqlite-vec: %s", exc)
+            else:
+                logger.debug("Failed to load sqlite-vec (semantic disabled): %s", exc)
+        finally:
+            # Closing the extension door after the one we wanted is in.
+            try:
+                self._conn.enable_load_extension(False)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _init_schema(self) -> None:
+        """Create all tables if they do not already exist.
+
+        Uses ``executescript`` so that CREATE TRIGGER blocks (which contain
+        nested semicolons inside BEGIN..END) survive intact.
+
+        FTS5 and vec0 are optional. When they fail, we fall back to applying
+        only the statements known to be safe so that legacy callers without
+        the [semantic] extra keep working. Semantic features will degrade
+        gracefully — see lore.search.
+        """
         conn = self._conn
-        for statement in _SQLITE_SCHEMA.strip().split(";"):
-            stmt = statement.strip()
-            if stmt:
+        semantic_enabled = os.getenv("LORE_SEMANTIC_SEARCH", "false").strip().lower() == "true"
+
+        try:
+            conn.executescript(_SQLITE_SCHEMA)
+            conn.commit()
+            # Probe whether FTS5 and vec0 actually materialised.
+            self._probe_optional_features()
+            return
+        except self._sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            # Two classes of failure we handle:
+            #   1. fts5 not compiled in
+            #   2. vec0 module not loaded (sqlite-vec missing)
+            fts_err = "fts5" in msg or "no such module: fts5" in msg
+            vec_err = "vec0" in msg or "no such module: vec0" in msg
+            if not (fts_err or vec_err):
+                raise
+            if semantic_enabled:
+                # Hard failure if user explicitly asked for semantic search.
+                logger.error(
+                    "LORE_SEMANTIC_SEARCH=true but required SQLite features are "
+                    "unavailable (%s). Install '.[semantic]' extra and use a "
+                    "Python build with FTS5 enabled.",
+                    exc,
+                )
+                raise
+            logger.warning(
+                "Optional SQLite features unavailable (%s); falling back to "
+                "core schema only. Enable LORE_SEMANTIC_SEARCH and install the "
+                "[semantic] extra to use semantic/hybrid search.",
+                exc,
+            )
+            self._init_core_schema_only(conn)
+            self._probe_optional_features()
+
+    def _init_core_schema_only(self, conn) -> None:
+        """Fallback path: apply only the plain CREATE TABLE statements.
+
+        Skips CREATE VIRTUAL TABLE (fts5/vec0) and CREATE TRIGGER (which
+        depend on the FTS5 table). Safe to call repeatedly.
+        """
+        for stmt in _CORE_SQLITE_STATEMENTS:
+            try:
                 conn.execute(stmt)
+            except self._sqlite3.OperationalError as exc:
+                # Should never happen for core CREATE TABLE; surface clearly.
+                logger.error("Core schema statement failed: %s\nSQL:\n%s", exc, stmt)
+                raise
         conn.commit()
+
+    def _probe_optional_features(self) -> None:
+        """Detect whether FTS5 and vec0 are available on this connection."""
+        try:
+            self._conn.execute("SELECT 1 FROM knowledge_kb_entries_fts LIMIT 0")
+            self.fts5_available = True
+        except Exception:  # noqa: BLE001
+            self.fts5_available = False
+        try:
+            self._conn.execute("SELECT 1 FROM knowledge_kb_vec_embeddings LIMIT 0")
+            # vec0 table only readable if extension is loaded
+            if not self.vec_extension_loaded:
+                # Table may persist on disk from a previous run; mark loaded.
+                self.vec_extension_loaded = True
+        except Exception:  # noqa: BLE001
+            self.vec_extension_loaded = False
 
     def table(self, name: str) -> SqliteTableQuery:
         """Start a query on a table (Supabase-compatible interface)."""
