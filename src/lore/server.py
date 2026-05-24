@@ -490,6 +490,48 @@ _TOOL_DEFINITIONS = [
             "required": ["dir_path"],
         },
     ),
+    # Semantic Search Tools (2) - v0.6
+    types.Tool(
+        name="kb_backfill_embeddings",
+        description=(
+            "Embed any KB entries that are missing or stale (model/content "
+            "changed). Idempotent: skips entries whose stored content_hash "
+            "still matches. Requires LORE_SEMANTIC_SEARCH=true."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "batch_size": {
+                    "type": "integer",
+                    "default": 32,
+                    "minimum": 1,
+                    "maximum": 512,
+                    "description": "How many entries to encode per batch (default 32).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional cap on entries to process this run.",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "If true, report what would be embedded without writing.",
+                },
+            },
+        },
+    ),
+    types.Tool(
+        name="kb_embedding_status",
+        description=(
+            "Report embedding coverage: total entries, embedded count, missing "
+            "count, current model, and per-model breakdown."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
     # MCP Index Tools (5)
     types.Tool(
         name="mcp_index_scan",
@@ -735,6 +777,12 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
             return format_response(handle_kb_ingest_dir(**arguments))
         elif name == "kb_sync_status":
             return format_response(handle_kb_sync_status(**arguments))
+
+        # Semantic Search Tools (v0.6)
+        elif name == "kb_backfill_embeddings":
+            return format_response(handle_kb_backfill_embeddings(**arguments))
+        elif name == "kb_embedding_status":
+            return format_response(handle_kb_embedding_status(**arguments))
 
         # MCP Index Tools
         elif name == "mcp_index_scan":
@@ -1952,6 +2000,198 @@ def handle_kb_sync_status(dir_path: str) -> dict:
     except Exception as e:
         logger.error(f"Error checking sync status: {e}", exc_info=True)
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+# =============================================================================
+# Semantic Search Maintenance Handlers (v0.6)
+# =============================================================================
+
+
+# Module-level lock that prevents concurrent backfill runs from competing for
+# the embedder (and from double-embedding the same rows). Threading.Lock is
+# sufficient here: handlers are sync and the process is single-tenant.
+_BACKFILL_LOCK = threading.Lock()
+
+
+def handle_kb_backfill_embeddings(
+    batch_size: int = 32,
+    limit: int | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """Embed any KB entries missing or stale embeddings.
+
+    A row is considered stale when:
+      - It has no row in ``knowledge_kb_embedding_meta``, OR
+      - Its computed content_hash differs from the stored hash, OR
+      - The stored model_name differs from the current LORE_EMBEDDING_MODEL.
+
+    The backfill is wrapped in an advisory lock so two callers don't race
+    each other to embed the same row. Per-row hash guards inside
+    ``_embed_kb_entry`` make the loop safe even if the lock isn't honored
+    (e.g. multi-process deployments).
+    """
+    if os.getenv("DB_BACKEND", "").strip().lower() != "sqlite":
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "kb_backfill_embeddings currently supports the sqlite backend only.",
+        )
+    if not _semantic_write_enabled():
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "Semantic search not enabled. Set LORE_SEMANTIC_SEARCH=true and install "
+            "the [semantic] extra.",
+        )
+
+    try:
+        from lore.embeddings import _model_name as _embedder_model_name
+        from lore.embeddings import compute_content_hash
+    except ImportError as exc:
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(exc))
+
+    current_model = _embedder_model_name()
+
+    if not _BACKFILL_LOCK.acquire(blocking=False):
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "Another backfill is already running; try again shortly.",
+        )
+
+    try:
+        conn = db._get_connection()
+        # Pull (kb_id, title, content) joined with current meta hash + model.
+        rows = conn.execute(
+            """
+            SELECT e.kb_id, e.title, e.content,
+                   m.content_hash AS meta_hash,
+                   m.model_name   AS meta_model
+            FROM knowledge_kb_entries e
+            LEFT JOIN knowledge_kb_embedding_meta m ON m.kb_id = e.kb_id
+            """
+        ).fetchall()
+
+        to_embed: list[tuple[str, str, str]] = []
+        skipped_current = 0
+        for r in rows:
+            kb_id, title, content, meta_hash, meta_model = (
+                r[0],
+                r[1] or "",
+                r[2] or "",
+                r[3],
+                r[4],
+            )
+            expected_hash = compute_content_hash(title, content)
+            if meta_hash == expected_hash and meta_model == current_model:
+                skipped_current += 1
+                continue
+            to_embed.append((kb_id, title, content))
+
+        if limit is not None:
+            to_embed = to_embed[: int(limit)]
+
+        if dry_run:
+            return ResponseEnvelope.success(
+                f"Backfill dry run: {len(to_embed)} entries would be embedded",
+                {
+                    "total_entries": len(rows),
+                    "needs_embedding": len(to_embed),
+                    "already_current": skipped_current,
+                    "model": current_model,
+                    "dry_run": True,
+                },
+            )
+
+        # Encode in batches for throughput; persist one row at a time so a
+        # mid-batch failure still produces partial progress.
+        embedded = 0
+        failed = 0
+        bs = max(1, int(batch_size))
+        for start in range(0, len(to_embed), bs):
+            batch = to_embed[start : start + bs]
+            for kb_id, title, content in batch:
+                ok, _ = _embed_kb_entry(kb_id, title, content)
+                if ok:
+                    embedded += 1
+                else:
+                    failed += 1
+
+        return ResponseEnvelope.success(
+            f"Backfill complete: embedded={embedded}, failed={failed}",
+            {
+                "total_entries": len(rows),
+                "embedded": embedded,
+                "failed": failed,
+                "already_current": skipped_current,
+                "model": current_model,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("kb_backfill_embeddings failed: %s", exc, exc_info=True)
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(exc))
+    finally:
+        _BACKFILL_LOCK.release()
+
+
+def handle_kb_embedding_status() -> dict:
+    """Report embedding coverage and configuration."""
+    if os.getenv("DB_BACKEND", "").strip().lower() != "sqlite":
+        return ResponseEnvelope.success(
+            "kb_embedding_status: non-sqlite backend (PostgreSQL semantic is Phase 2)",
+            {
+                "backend": os.getenv("DB_BACKEND", "unknown"),
+                "semantic_enabled": False,
+                "phase": 2,
+            },
+        )
+
+    try:
+        from lore.embeddings import EMBEDDING_DIM
+        from lore.embeddings import _model_name as _embedder_model_name
+    except ImportError:
+        return ResponseEnvelope.success(
+            "Embeddings module not installed",
+            {
+                "backend": "sqlite",
+                "semantic_enabled": False,
+                "embeddings_module": False,
+            },
+        )
+
+    try:
+        conn = db._get_connection()
+        total = conn.execute("SELECT COUNT(*) FROM knowledge_kb_entries").fetchone()[0]
+        if getattr(db, "vec_extension_loaded", False):
+            embedded = conn.execute("SELECT COUNT(*) FROM knowledge_kb_embedding_meta").fetchone()[
+                0
+            ]
+            per_model_rows = conn.execute(
+                "SELECT model_name, COUNT(*) FROM knowledge_kb_embedding_meta "
+                "GROUP BY model_name ORDER BY COUNT(*) DESC"
+            ).fetchall()
+            per_model = {row[0]: row[1] for row in per_model_rows}
+        else:
+            embedded = 0
+            per_model = {}
+        missing = max(0, total - embedded)
+
+        return ResponseEnvelope.success(
+            f"Embedding coverage: {embedded}/{total} entries",
+            {
+                "backend": "sqlite",
+                "semantic_enabled": _semantic_write_enabled(),
+                "vec_extension_loaded": bool(getattr(db, "vec_extension_loaded", False)),
+                "fts5_available": bool(getattr(db, "fts5_available", False)),
+                "current_model": _embedder_model_name(),
+                "embedding_dim": EMBEDDING_DIM,
+                "total_entries": total,
+                "embedded": embedded,
+                "missing": missing,
+                "coverage_pct": round(100.0 * embedded / total, 2) if total else 0.0,
+                "per_model": per_model,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("kb_embedding_status failed: %s", exc, exc_info=True)
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(exc))
 
 
 # =============================================================================
