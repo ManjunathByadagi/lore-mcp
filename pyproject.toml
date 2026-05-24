@@ -47,6 +47,13 @@ dependencies = [
 supabase = [
     "supabase>=1.0.0",
 ]
+semantic = [
+    # Sentence-transformers ONNX-backed inference for local embeddings.
+    # Pin sqlite-vec exactly: it is pre-1.0 and may break API between minor versions.
+    "sentence-transformers>=2.7.0",
+    "sqlite-vec==0.1.9",
+    "onnxruntime>=1.17.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
