@@ -54,6 +54,9 @@ semantic = [
     "sqlite-vec==0.1.9",
     "onnxruntime>=1.17.0",
     "optimum[onnxruntime]>=1.17.0",
+    # PostgreSQL semantic search support (Phase 2 / Issue #6).
+    # Registers vector/halfvec adapters with psycopg2 so list[float] casts cleanly.
+    "pgvector>=0.2.5",
 ]
 dev = [
     "pytest>=7.0.0",

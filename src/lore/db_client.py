@@ -84,6 +84,13 @@ class LocalPostgresClient:
         self.password = password
         self._conn = None
 
+        # Semantic search state (Phase 2 / Issue #6). Populated by _init_schema().
+        # Mirrors the SqliteClient interface so lore.search can stay backend-agnostic.
+        self.vec_extension_loaded: bool = False
+        self.pgvector_version: str | None = None
+        self.vector_type: str = "vector"  # "halfvec" when pgvector >= 0.7, else "vector"
+        self._schema_initialized: bool = False
+
         logger.info(f"LocalPostgresClient initialized for {database}@{host}:{port}")
 
     def _get_connection(self):
@@ -101,7 +108,128 @@ class LocalPostgresClient:
             self._conn.set_client_encoding("UTF8")
             self._conn.autocommit = True
             logger.debug("Created new PostgreSQL connection")
+            # Initialize semantic schema once per process (idempotent CREATE IF NOT EXISTS).
+            if not self._schema_initialized:
+                self._init_schema()
+                self._schema_initialized = True
         return self._conn
+
+    def _init_schema(self) -> None:
+        """Create kb_embeddings table for PostgreSQL semantic search.
+
+        Idempotent: safe to call on every startup. Detects pgvector version
+        and chooses halfvec(384) (>=0.7) or vector(384) fallback.
+        Silently no-ops when the vector extension is not installed —
+        lore.search degrades to FTS-only behavior in that case.
+
+        Sets self.vec_extension_loaded, self.pgvector_version, and
+        self.vector_type so callers can introspect the live capabilities.
+        """
+        semantic_enabled = (
+            os.getenv("LORE_SEMANTIC_SEARCH", "false").strip().lower() == "true"
+        )
+        conn = self._conn
+        cursor = conn.cursor()
+        try:
+            # Detect pgvector extension and version.
+            cursor.execute(
+                "SELECT extversion FROM pg_extension WHERE extname = %s",
+                ("vector",),
+            )
+            row = cursor.fetchone()
+            if not row:
+                self.vec_extension_loaded = False
+                if semantic_enabled:
+                    logger.warning(
+                        "LORE_SEMANTIC_SEARCH=true but pgvector extension is not "
+                        "installed in database %s. Semantic search will be "
+                        "unavailable on PostgreSQL.",
+                        self.database,
+                    )
+                return
+
+            self.pgvector_version = row[0]
+
+            # Determine vector type: halfvec requires pgvector >= 0.7.
+            def _version_tuple(v: str) -> tuple:
+                parts = []
+                for chunk in v.split("."):
+                    digits = "".join(ch for ch in chunk if ch.isdigit())
+                    parts.append(int(digits) if digits else 0)
+                return tuple(parts)
+
+            try:
+                supports_halfvec = _version_tuple(self.pgvector_version) >= (0, 7, 0)
+            except Exception:  # noqa: BLE001
+                supports_halfvec = False
+
+            self.vector_type = "halfvec" if supports_halfvec else "vector"
+            vt = self.vector_type
+            ops = "halfvec_cosine_ops" if supports_halfvec else "vector_cosine_ops"
+
+            # Check existence first so we don't issue CREATE on every startup.
+            cursor.execute(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = %s AND table_name = %s)",
+                ("knowledge", "kb_embeddings"),
+            )
+            exists = cursor.fetchone()[0]
+
+            if not exists:
+                logger.info(
+                    "Creating knowledge.kb_embeddings (%s(384), pgvector %s)",
+                    vt,
+                    self.pgvector_version,
+                )
+                cursor.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS knowledge.kb_embeddings (
+                        kb_id        TEXT PRIMARY KEY
+                                     REFERENCES knowledge.kb_entries(kb_id) ON DELETE CASCADE,
+                        embedding    {vt}(384) NOT NULL,
+                        content_hash TEXT NOT NULL,
+                        model_name   TEXT NOT NULL,
+                        model_dims   INTEGER NOT NULL DEFAULT 384,
+                        embedded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cursor.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_kb_embeddings_hnsw
+                        ON knowledge.kb_embeddings
+                        USING hnsw (embedding {ops})
+                        WITH (m = 16, ef_construction = 64)
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_kb_embeddings_model
+                        ON knowledge.kb_embeddings (model_name)
+                    """
+                )
+
+            # Final verification: can we actually select from the table?
+            cursor.execute("SELECT 1 FROM knowledge.kb_embeddings LIMIT 0")
+            self.vec_extension_loaded = True
+            logger.info(
+                "PostgreSQL semantic ready: pgvector=%s, vector_type=%s(384)",
+                self.pgvector_version,
+                self.vector_type,
+            )
+        except self._psycopg2.Error as exc:
+            # Don't crash on schema init failure — degrade gracefully.
+            self.vec_extension_loaded = False
+            if semantic_enabled:
+                logger.warning(
+                    "Failed to initialize kb_embeddings schema: %s. "
+                    "Semantic search on PostgreSQL will be unavailable.",
+                    exc,
+                )
+            else:
+                logger.debug("kb_embeddings schema init skipped: %s", exc)
+        finally:
+            cursor.close()
 
     def table(self, name: str) -> "TableQuery":
         """Start a query on a table (Supabase-compatible interface)."""
