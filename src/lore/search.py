@@ -250,6 +250,9 @@ def fts_search_postgres(
         logger.warning("Failed to acquire PG connection for FTS: %s", exc)
         return []
 
+    # Dual-config FTS (Issue #10): English-stemmed config handles natural language;
+    # simple config + regexp_replace splits dotted/slashed identifiers so that
+    # e.g. "asyncio gather" matches content containing "asyncio.gather".
     sql = (
         "SELECT kb_id, title, topic, tags, author, source_type, verified, "
         "       ts_rank_cd("
@@ -258,14 +261,19 @@ def fts_search_postgres(
         "           websearch_to_tsquery('english', %s)"
         "       ) AS score "
         "FROM knowledge.kb_entries "
-        "WHERE to_tsvector('english', title || ' ' || content) "
-        "      @@ websearch_to_tsquery('english', %s)"
+        "WHERE to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')) "
+        "      @@ websearch_to_tsquery('english', %s) "
+        "   OR to_tsvector('simple', regexp_replace("
+        "               coalesce(title,'') || ' ' || coalesce(content,''),"
+        "               '[.,/\\\\:_-]', ' ', 'g')) "
+        "      @@ plainto_tsquery('simple', regexp_replace(%s,"
+        "               '[.,/\\\\:_-]', ' ', 'g'))"
     )
-    params: list[Any] = [query, query]
+    params: list[Any] = [query, query, query]
     if topic:
         sql += " AND topic = %s"
         params.append(topic)
-    sql += " ORDER BY score DESC LIMIT %s"
+    sql += " ORDER BY score DESC NULLS LAST LIMIT %s"
     params.append(int(limit))
 
     cursor = conn.cursor()

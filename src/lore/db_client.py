@@ -129,6 +129,18 @@ class LocalPostgresClient:
         conn = self._conn
         cursor = conn.cursor()
         try:
+            # Issue #10: GIN index using simple config + regexp_replace so that
+            # dotted/slashed identifiers like asyncio.gather are split into
+            # individual tokens. Idempotent (CREATE INDEX IF NOT EXISTS).
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_kb_search_simple "
+                "    ON knowledge.kb_entries "
+                "    USING gin(to_tsvector('simple', regexp_replace("
+                "        coalesce(title,'') || ' ' || coalesce(content,''),"
+                "        '[.,/\\\\:_-]', ' ', 'g')))"
+            )
+            logger.debug("idx_kb_search_simple ensured")
+
             # Detect pgvector extension and version.
             cursor.execute(
                 "SELECT extversion FROM pg_extension WHERE extname = %s",
