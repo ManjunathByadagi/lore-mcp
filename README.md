@@ -91,40 +91,53 @@ Add one line to every agent's system prompt and one entry to `~/.mcp.json` — t
 
 ## Quick Start
 
-### Solo (SQLite — zero config, no server needed)
+**No database setup required.** Lore runs out of the box with SQLite.
+
+### 1. Install
 
 ```bash
 pip install lore-knowledge-mcp
-export DB_BACKEND=sqlite KNOWLEDGE_DATA_DIR=~/.lore
-lore-mcp
 ```
 
-Add to Claude Code:
+### 2. Start the server
+
+```bash
+# Stdio mode (for local MCP clients like Claude Code)
+lore-mcp
+
+# HTTP mode (for remote or multi-agent access)
+lore-mcp --host 0.0.0.0 --port 8000
+```
+
+### 3. Add to your MCP client
+
+**Claude Code / Claude Desktop** — add to `~/.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "lore": {
-      "command": "lore-mcp",
-      "env": {
-        "DB_BACKEND": "sqlite",
-        "KNOWLEDGE_DATA_DIR": "~/.lore"
-      }
+      "type": "stdio",
+      "command": "lore-mcp"
     }
   }
 }
 ```
 
-### Team (PostgreSQL — shared knowledge layer)
+Or for HTTP mode (recommended for teams):
 
-```bash
-pip install lore-knowledge-mcp
-export DB_BACKEND=local DB_HOST=localhost DB_PORT=5432 \
-       DB_NAME=lore DB_USER=lore_user DB_PASSWORD=yourpassword
-lore-mcp --host 0.0.0.0 --port 5555
+```json
+{
+  "mcpServers": {
+    "lore": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
 ```
 
-All agents on your team point at `http://your-server:5555/mcp`. One shared knowledge layer.
+That’s it. Lore is ready.
 
 ---
 
@@ -185,11 +198,27 @@ All agents on your team point at `http://your-server:5555/mcp`. One shared knowl
 
 ## Backends
 
-| Backend | Use case | Setup |
+| | SQLite | PostgreSQL |
 |---|---|---|
-| SQLite | Solo / local / single machine | No server, one env var |
-| PostgreSQL | Team / shared / production | Self-hosted DB |
-| Supabase | Cloud PostgreSQL | Managed, zero-ops |
+| Setup required | None | Existing PostgreSQL instance |
+| Best for | Solo developers, local use | Teams, shared agents, production |
+| Config | `DB_BACKEND=sqlite` (default) | `DB_BACKEND=postgres` + connection vars |
+| Data location | `~/.local/share/lore/` | Your database |
+
+**SQLite is the default.** No configuration needed — just install and run.
+
+**PostgreSQL** is for teams who want a shared knowledge layer accessible from multiple machines or agents simultaneously.
+
+```bash
+# PostgreSQL setup
+export DB_BACKEND=postgres
+export DB_HOST=your-db-host
+export DB_PORT=5432
+export DB_NAME=lore
+export DB_USER=your-user
+export DB_PASSWORD=your-password
+lore-mcp
+```
 
 ---
 
