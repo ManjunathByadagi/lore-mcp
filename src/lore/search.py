@@ -258,8 +258,7 @@ def fts_search_postgres(
         "           websearch_to_tsquery('english', %s)"
         "       ) AS score "
         "FROM knowledge.kb_entries "
-        "WHERE to_tsvector('english', "
-        "          coalesce(title,'') || ' ' || coalesce(content,'')) "
+        "WHERE to_tsvector('english', title || ' ' || content) "
         "      @@ websearch_to_tsquery('english', %s)"
     )
     params: list[Any] = [query, query]
@@ -306,21 +305,22 @@ def vector_search_postgres(
     vt = getattr(db_client, "vector_type", "vector")
     vec_literal = _pg_format_vector_literal(query_vector)
 
-    # Use a CTE so the ORDER BY references the cast vector once.
+    # CTE casts the query vector once; ORDER BY references q.qvec (already cast).
     sql = (
+        f"WITH q AS (SELECT %s::{vt} AS qvec) "
         "SELECT e.kb_id, e.title, e.topic, e.tags, e.author, e.source_type, "
         "       e.verified, "
-        f"       (em.embedding <=> %s::{vt}) AS distance "
+        "       (em.embedding <=> q.qvec) AS distance "
         "FROM knowledge.kb_embeddings em "
         "JOIN knowledge.kb_entries e ON e.kb_id = em.kb_id "
+        "CROSS JOIN q "
         "WHERE TRUE"
     )
     params: list[Any] = [vec_literal]
     if topic:
         sql += " AND e.topic = %s"
         params.append(topic)
-    sql += f" ORDER BY em.embedding <=> %s::{vt} LIMIT %s"
-    params.append(vec_literal)
+    sql += " ORDER BY em.embedding <=> q.qvec LIMIT %s"
     params.append(int(limit))
 
     cursor = conn.cursor()

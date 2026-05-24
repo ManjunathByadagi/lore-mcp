@@ -18,8 +18,13 @@ CREATE TABLE IF NOT EXISTS knowledge.kb_embeddings (
     content_hash TEXT NOT NULL,
     model_name   TEXT NOT NULL,
     model_dims   INTEGER NOT NULL DEFAULT 384,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     embedded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Add created_at to existing deployments (idempotent).
+ALTER TABLE knowledge.kb_embeddings
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 -- HNSW cosine index. Matches vectors.file_embeddings convention in the same DB.
 CREATE INDEX IF NOT EXISTS idx_kb_embeddings_hnsw
