@@ -2219,19 +2219,21 @@ def handle_kb_backfill_embeddings(
     """Embed any KB entries missing or stale embeddings.
 
     A row is considered stale when:
-      - It has no row in ``knowledge_kb_embedding_meta``, OR
+      - It has no row in the embeddings table, OR
       - Its computed content_hash differs from the stored hash, OR
       - The stored model_name differs from the current LORE_EMBEDDING_MODEL.
 
-    The backfill is wrapped in an advisory lock so two callers don't race
-    each other to embed the same row. Per-row hash guards inside
-    ``_embed_kb_entry`` make the loop safe even if the lock isn't honored
-    (e.g. multi-process deployments).
+    On SQLite the backfill is guarded by the process-local ``_BACKFILL_LOCK``;
+    on PostgreSQL it additionally acquires ``pg_try_advisory_lock`` so that
+    concurrent processes cannot race each other to embed the same rows.
+    Per-row hash guards inside the persist helpers keep the loop safe even
+    when the lock is missed.
     """
-    if os.getenv("DB_BACKEND", "").strip().lower() != "sqlite":
+    backend = _backend_kind()
+    if backend == "":
         return ResponseEnvelope.error(
             ErrorCodes.INVALID_INPUT,
-            "kb_backfill_embeddings currently supports the sqlite backend only.",
+            "kb_backfill_embeddings: unsupported DB_BACKEND",
         )
     if not _semantic_write_enabled():
         return ResponseEnvelope.error(
@@ -2241,8 +2243,8 @@ def handle_kb_backfill_embeddings(
         )
 
     try:
+        from lore.embeddings import EMBEDDING_DIM, compute_content_hash, encode_batch
         from lore.embeddings import _model_name as _embedder_model_name
-        from lore.embeddings import compute_content_hash
     except ImportError as exc:
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(exc))
 
@@ -2254,18 +2256,59 @@ def handle_kb_backfill_embeddings(
             "Another backfill is already running; try again shortly.",
         )
 
+    # PG advisory lock — same hashtext() string as future workers will use so
+    # cross-process callers cooperate. ``pg_try_advisory_lock`` is non-blocking
+    # and returns false when another backend already holds the lock.
+    pg_advisory_held = False
+    if backend == "postgres":
+        try:
+            conn = db._get_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT pg_try_advisory_lock(hashtext('lore.backfill'))")
+                pg_advisory_held = bool(cur.fetchone()[0])
+            finally:
+                cur.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not acquire PG advisory lock: %s", exc)
+            pg_advisory_held = False
+        if not pg_advisory_held:
+            _BACKFILL_LOCK.release()
+            return ResponseEnvelope.error(
+                ErrorCodes.INVALID_INPUT,
+                "Another backfill holds the PostgreSQL advisory lock; try again shortly.",
+            )
+
     try:
-        conn = db._get_connection()
-        # Pull (kb_id, title, content) joined with current meta hash + model.
-        rows = conn.execute(
-            """
-            SELECT e.kb_id, e.title, e.content,
-                   m.content_hash AS meta_hash,
-                   m.model_name   AS meta_model
-            FROM knowledge_kb_entries e
-            LEFT JOIN knowledge_kb_embedding_meta m ON m.kb_id = e.kb_id
-            """
-        ).fetchall()
+        if backend == "sqlite":
+            conn = db._get_connection()
+            # Pull (kb_id, title, content) joined with current meta hash + model.
+            rows = conn.execute(
+                """
+                SELECT e.kb_id, e.title, e.content,
+                       m.content_hash AS meta_hash,
+                       m.model_name   AS meta_model
+                FROM knowledge_kb_entries e
+                LEFT JOIN knowledge_kb_embedding_meta m ON m.kb_id = e.kb_id
+                """
+            ).fetchall()
+        else:
+            # PostgreSQL.
+            conn = db._get_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    SELECT e.kb_id, e.title, e.content,
+                           em.content_hash AS meta_hash,
+                           em.model_name   AS meta_model
+                    FROM knowledge.kb_entries e
+                    LEFT JOIN knowledge.kb_embeddings em ON em.kb_id = e.kb_id
+                    """
+                )
+                rows = cur.fetchall()
+            finally:
+                cur.close()
 
         to_embed: list[tuple[str, str, str]] = []
         skipped_current = 0
@@ -2290,6 +2333,7 @@ def handle_kb_backfill_embeddings(
             return ResponseEnvelope.success(
                 f"Backfill dry run: {len(to_embed)} entries would be embedded",
                 {
+                    "backend": backend,
                     "total_entries": len(rows),
                     "needs_embedding": len(to_embed),
                     "already_current": skipped_current,
@@ -2305,16 +2349,45 @@ def handle_kb_backfill_embeddings(
         bs = max(1, int(batch_size))
         for start in range(0, len(to_embed), bs):
             batch = to_embed[start : start + bs]
-            for kb_id, title, content in batch:
-                ok, _ = _embed_kb_entry(kb_id, title, content)
-                if ok:
-                    embedded += 1
-                else:
-                    failed += 1
+            if backend == "postgres":
+                # PG path: batch-encode then upsert each row. Cheaper than
+                # encoding one-at-a-time via _embed_kb_entry.
+                texts = [f"{t}\n\n{c}" for _, t, c in batch]
+                try:
+                    vectors = encode_batch(texts)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Batch encode failed (%d rows): %s", len(batch), exc)
+                    failed += len(batch)
+                    continue
+                for (kb_id, title, content), vec in zip(batch, vectors, strict=True):
+                    if len(vec) != EMBEDDING_DIM:
+                        logger.error("PG backfill dim mismatch for %s", kb_id)
+                        failed += 1
+                        continue
+                    content_hash = compute_content_hash(title, content)
+                    ok, _ = _persist_embedding_postgres(
+                        kb_id,
+                        vec,
+                        content_hash,
+                        current_model,
+                        EMBEDDING_DIM,
+                    )
+                    if ok:
+                        embedded += 1
+                    else:
+                        failed += 1
+            else:
+                for kb_id, title, content in batch:
+                    ok, _ = _embed_kb_entry(kb_id, title, content)
+                    if ok:
+                        embedded += 1
+                    else:
+                        failed += 1
 
         return ResponseEnvelope.success(
             f"Backfill complete: embedded={embedded}, failed={failed}",
             {
+                "backend": backend,
                 "total_entries": len(rows),
                 "embedded": embedded,
                 "failed": failed,
@@ -2326,18 +2399,29 @@ def handle_kb_backfill_embeddings(
         logger.error("kb_backfill_embeddings failed: %s", exc, exc_info=True)
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(exc))
     finally:
+        if pg_advisory_held:
+            try:
+                conn = db._get_connection()
+                cur = conn.cursor()
+                try:
+                    cur.execute("SELECT pg_advisory_unlock(hashtext('lore.backfill'))")
+                    cur.fetchone()
+                finally:
+                    cur.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to release PG advisory lock: %s", exc)
         _BACKFILL_LOCK.release()
 
 
 def handle_kb_embedding_status() -> dict:
     """Report embedding coverage and configuration."""
-    if os.getenv("DB_BACKEND", "").strip().lower() != "sqlite":
+    backend = _backend_kind()
+    if backend == "":
         return ResponseEnvelope.success(
-            "kb_embedding_status: non-sqlite backend (PostgreSQL semantic is Phase 2)",
+            "kb_embedding_status: unsupported backend",
             {
                 "backend": os.getenv("DB_BACKEND", "unknown"),
                 "semantic_enabled": False,
-                "phase": 2,
             },
         )
 
@@ -2348,41 +2432,102 @@ def handle_kb_embedding_status() -> dict:
         return ResponseEnvelope.success(
             "Embeddings module not installed",
             {
-                "backend": "sqlite",
+                "backend": backend,
                 "semantic_enabled": False,
                 "embeddings_module": False,
             },
         )
 
     try:
+        if backend == "sqlite":
+            conn = db._get_connection()
+            total = conn.execute("SELECT COUNT(*) FROM knowledge_kb_entries").fetchone()[0]
+            if getattr(db, "vec_extension_loaded", False):
+                embedded = conn.execute(
+                    "SELECT COUNT(*) FROM knowledge_kb_embedding_meta"
+                ).fetchone()[0]
+                per_model_rows = conn.execute(
+                    "SELECT model_name, COUNT(*) FROM knowledge_kb_embedding_meta "
+                    "GROUP BY model_name ORDER BY COUNT(*) DESC"
+                ).fetchall()
+                per_model = {row[0]: row[1] for row in per_model_rows}
+            else:
+                embedded = 0
+                per_model = {}
+            missing = max(0, total - embedded)
+            current_model = _embedder_model_name()
+            model_mismatch = sum(
+                count for name, count in per_model.items() if name != current_model
+            )
+
+            return ResponseEnvelope.success(
+                f"Embedding coverage: {embedded}/{total} entries",
+                {
+                    "backend": "sqlite",
+                    "semantic_enabled": _semantic_write_enabled(),
+                    "vec_extension_loaded": bool(getattr(db, "vec_extension_loaded", False)),
+                    "fts5_available": bool(getattr(db, "fts5_available", False)),
+                    "current_model": current_model,
+                    "embedding_dim": EMBEDDING_DIM,
+                    "total_entries": total,
+                    "embedded": embedded,
+                    "missing": missing,
+                    "model_mismatch": model_mismatch,
+                    "coverage_pct": round(100.0 * embedded / total, 2) if total else 0.0,
+                    "per_model": per_model,
+                },
+            )
+
+        # PostgreSQL.
         conn = db._get_connection()
-        total = conn.execute("SELECT COUNT(*) FROM knowledge_kb_entries").fetchone()[0]
-        if getattr(db, "vec_extension_loaded", False):
-            embedded = conn.execute("SELECT COUNT(*) FROM knowledge_kb_embedding_meta").fetchone()[
-                0
-            ]
-            per_model_rows = conn.execute(
-                "SELECT model_name, COUNT(*) FROM knowledge_kb_embedding_meta "
-                "GROUP BY model_name ORDER BY COUNT(*) DESC"
-            ).fetchall()
-            per_model = {row[0]: row[1] for row in per_model_rows}
-        else:
-            embedded = 0
-            per_model = {}
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT COUNT(*) FROM knowledge.kb_entries")
+            total = cur.fetchone()[0]
+
+            current_model = _embedder_model_name()
+            if getattr(db, "vec_extension_loaded", False):
+                cur.execute("SELECT COUNT(*) FROM knowledge.kb_embeddings")
+                embedded = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT model_name, COUNT(*) FROM knowledge.kb_embeddings "
+                    "GROUP BY model_name ORDER BY COUNT(*) DESC"
+                )
+                per_model = {row[0]: row[1] for row in cur.fetchall()}
+                cur.execute(
+                    "SELECT COUNT(*) FROM knowledge.kb_embeddings WHERE model_name != %s",
+                    (current_model,),
+                )
+                model_mismatch = cur.fetchone()[0]
+            else:
+                embedded = 0
+                per_model = {}
+                model_mismatch = 0
+        finally:
+            cur.close()
+
         missing = max(0, total - embedded)
+        pg_version = getattr(db, "pgvector_version", None)
+        vector_type = getattr(db, "vector_type", None)
+        vec_ext_label = (
+            f"pgvector {pg_version} ({vector_type}(384))" if pg_version else "pgvector unavailable"
+        )
 
         return ResponseEnvelope.success(
             f"Embedding coverage: {embedded}/{total} entries",
             {
-                "backend": "sqlite",
+                "backend": "postgres",
                 "semantic_enabled": _semantic_write_enabled(),
                 "vec_extension_loaded": bool(getattr(db, "vec_extension_loaded", False)),
-                "fts5_available": bool(getattr(db, "fts5_available", False)),
-                "current_model": _embedder_model_name(),
+                "vector_extension": vec_ext_label,
+                "pgvector_version": pg_version,
+                "vector_type": vector_type,
+                "current_model": current_model,
                 "embedding_dim": EMBEDDING_DIM,
                 "total_entries": total,
                 "embedded": embedded,
                 "missing": missing,
+                "model_mismatch": model_mismatch,
                 "coverage_pct": round(100.0 * embedded / total, 2) if total else 0.0,
                 "per_model": per_model,
             },
