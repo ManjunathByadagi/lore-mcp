@@ -2,10 +2,11 @@
 
 **`lore-knowledge-mcp`** · Operational knowledge layer for engineering teams and their AI agents.
 
-[![Version](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/davidgut1982/lore-mcp)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue)](https://github.com/davidgut1982/lore-mcp)
 [![CI](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-green)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
+[![Hybrid Search](https://img.shields.io/badge/search-hybrid%20%2B%20semantic-blueviolet)](https://github.com/davidgut1982/lore-mcp#semantic-search-v060)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![Lore demo](docs/demo.gif)
@@ -38,7 +39,7 @@ Context lost at session end      Knowledge persists across all sessions
 | OB1 / personal memory | One person | Your thoughts and captures | No |
 | Mem0 / Zep | App developers | User preferences, conversations | Partially |
 | Confluence / Notion | Human teams | Documentation (human-browsed) | No |
-| **Lore** | **Engineering teams + AI agents** | **How your systems actually work** | **Yes** |
+| **Lore** | **Engineering teams + AI agents** | **How your systems actually work — searchable by meaning, not just keywords** | **Yes** |
 
 Lore is not a second brain. It's the operational intelligence your agents need to work in *your* environment — not just any environment.
 
@@ -81,6 +82,48 @@ Your agents know: result 1 is production-safe. Result 2, spot-check before actin
 
 ---
 
+## Semantic Search (v0.6.0+)
+
+Lore finds entries by meaning, not just keywords. Search "DNS broken in containers" and it returns an entry titled "LXC containers inherit resolv.conf from the host" — no keyword overlap required.
+
+Powered by local sentence-transformers embeddings (no API key, no external calls), combined with FTS5 lexical search and Reciprocal Rank Fusion. The same model used by mcp-memory-service, fully self-hosted.
+
+### Enable it
+
+```bash
+pip install lore-knowledge-mcp[semantic]
+LORE_SEMANTIC_SEARCH=true lore-mcp
+```
+
+### What you get
+
+| Mode | When to use |
+|---|---|
+| `fts` | Exact term matches (default when semantic is off) |
+| `semantic` | Meaning-based retrieval, no keyword overlap needed |
+| `hybrid` | Best of both — FTS5 + vector via RRF (recommended) |
+
+### Backfill existing KB
+
+If you already have entries, generate embeddings for them:
+
+```
+kb_backfill_embeddings()    # idempotent, safe to re-run
+kb_embedding_status()       # check coverage
+```
+
+### Configuration
+
+| Variable | Default | Notes |
+|---|---|---|
+| `LORE_SEMANTIC_SEARCH` | `false` | Master switch — off = current behavior unchanged |
+| `LORE_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | 384d, ~90MB, English-optimized |
+| `LORE_RRF_K` | `10` | Increase to 30–60 for corpora >10k entries |
+
+For multilingual content, set `LORE_EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2` (same 384d, no schema change).
+
+---
+
 ## Automating Lore in Your Workflow
 
 Add one line to every agent's system prompt and one entry to `~/.mcp.json` — that's the entire integration. Each phase of your engineering workflow reads prior knowledge from Lore and writes its findings back, so nothing is re-discovered from scratch.
@@ -98,6 +141,14 @@ Add one line to every agent's system prompt and one entry to `~/.mcp.json` — t
 ```bash
 pip install lore-knowledge-mcp
 ```
+
+### Optional: semantic search
+
+```bash
+pip install lore-knowledge-mcp[semantic]
+```
+
+Then set `LORE_SEMANTIC_SEARCH=true`. See [Semantic Search](#semantic-search-v060) for details.
 
 ### 2. Start the server
 
