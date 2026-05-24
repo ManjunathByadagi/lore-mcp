@@ -53,6 +53,7 @@ semantic = [
     "sentence-transformers>=2.7.0",
     "sqlite-vec==0.1.9",
     "onnxruntime>=1.17.0",
+    "optimum[onnxruntime]>=1.17.0",
 ]
 dev = [
     "pytest>=7.0.0",

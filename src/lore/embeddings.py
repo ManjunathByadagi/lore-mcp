@@ -52,6 +52,11 @@ def _model_name() -> str:
     return raw
 
 
+def get_model_name() -> str:
+    """Public accessor for the resolved embedding model name."""
+    return _model_name()
+
+
 def _model_backend() -> str:
     """Resolve sentence-transformers backend: 'onnx' (default) or 'torch'."""
     return os.getenv("LORE_EMBEDDING_BACKEND", "onnx").strip().lower() or "onnx"

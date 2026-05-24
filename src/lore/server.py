@@ -1061,7 +1061,7 @@ def handle_kb_search(
         )
 
         if wants_vectors and sqlite_vectors_ok:
-            from lore.embeddings import EmbeddingUnavailableError, encode_text
+            from lore.embeddings import EmbeddingUnavailableError, encode_text, get_model_name
 
             def _encode_query(q: str) -> list[float] | None:
                 try:
@@ -1082,23 +1082,23 @@ def handle_kb_search(
                 search_mode=effective_mode,
                 encode_query=_encode_query,
             )
+            resp_data: dict = {
+                "results": results,
+                "count": len(results),
+                "search_mode": effective_mode,
+                "requested_mode": requested_mode,
+            }
+            if effective_mode in {"semantic", "hybrid"}:
+                resp_data["model"] = get_model_name()
+            if effective_mode == "hybrid":
+                resp_data["rrf_k"] = _search.rrf_k()
             return ResponseEnvelope.success(
                 f"Found {len(results)} KB entries (mode={effective_mode})",
-                {
-                    "results": results,
-                    "count": len(results),
-                    "search_mode": effective_mode,
-                    "requested_mode": requested_mode,
-                },
+                resp_data,
             )
 
         # SQLite FTS5-only fast path (no embeddings required).
-        if (
-            is_sqlite
-            and requested_mode == "fts"
-            and getattr(db, "fts5_available", False)
-            and _search.semantic_enabled()
-        ):
+        if is_sqlite and requested_mode == "fts" and getattr(db, "fts5_available", False):
             results = _search.fts5_search_sqlite(db, query, topic, top_k_int)
             # Strip content from response (consistent with hybrid path).
             results = [{k: v for k, v in r.items() if k != "content"} for r in results]

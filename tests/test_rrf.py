@@ -90,3 +90,13 @@ def test_rrf_duplicate_in_single_list_counts_once():
 )
 def test_candidate_pool_size(top_k: int, corpus_size: int, expected: int):
     assert candidate_pool_size(top_k, corpus_size) == expected
+
+def test_rrf_ties_deterministic():
+    """Items with identical RRF scores must be ordered deterministically by kb_id."""
+    # "a" and "b" each appear once at rank 1 in separate lists -> equal scores.
+    # After Fix 2 the sort key is (-score, kb_id), so "a" < "b" alphabetically
+    # means "a" must always come first regardless of dict insertion order.
+    for _ in range(10):
+        result = reciprocal_rank_fusion([["a"], ["b"]])
+        ids = [kb_id for kb_id, _ in result]
+        assert ids == ["a", "b"], f"Non-deterministic ordering: {ids}"

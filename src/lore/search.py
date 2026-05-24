@@ -92,7 +92,7 @@ def reciprocal_rank_fusion(
             seen_in_list.add(ident)
             scores[ident] = scores.get(ident, 0.0) + 1.0 / (fusion_k + rank)
 
-    return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    return sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
 # ---------------------------------------------------------------------------
