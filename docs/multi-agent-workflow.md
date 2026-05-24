@@ -233,6 +233,24 @@ Teams running five or more agents across multiple sessions see this most clearly
 
 ---
 
+## Semantic Search Makes This Better
+
+The six-phase workflow above solves the cold-start problem with keyword search: a research agent writes `author="research-agent"`, an engineer searches `kb_search(query="auth patterns")` and finds it. This works when the phrasing overlaps.
+
+With semantic search enabled (v0.6.0+), it works even when the phrasing does not. The research agent writes `"JWT refresh token — existing implementation in lib/auth/"` and the engineer searches `"authentication session management"` — no shared words, but the vector representations are close in meaning. The engineer finds the entry and does not duplicate it.
+
+The practical gains in multi-agent workflows:
+- **Cross-agent retrieval by meaning.** A QA agent writing `"410 Gone on deleted user profiles is expected"` will surface for an engineer searching `"status codes for missing users"` even though none of those words appear in the stored entry.
+- **Less brittle tagging.** Keyword search rewards exact tags; hybrid search finds entries even when agents used different terminology.
+- **Compound sessions.** By session ten, knowledge from earlier sessions is found reliably even as terminology evolves.
+
+To enable: add `LORE_SEMANTIC_SEARCH=true` to your Lore server config and install `pip install lore-knowledge-mcp[semantic]`. Then run `kb_backfill_embeddings()` once for any existing entries. Searches issued by your agents without `search_mode` will automatically use hybrid mode.
+
+For a detailed explanation of how the hybrid search works, see [docs/architecture.md](./architecture.md).
+
+
+---
+
 ## See Also
 
 - [Quick Start](../README.md#quick-start)
