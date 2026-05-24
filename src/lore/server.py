@@ -776,6 +776,139 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
 # =============================================================================
 
 
+def _semantic_write_enabled() -> bool:
+    """Whether to embed on the KB write path. SQLite + vec0 only for MVP."""
+    backend = os.getenv("DB_BACKEND", "").strip().lower()
+    if backend != "sqlite":
+        # PostgreSQL semantic write path: Phase 2.
+        return False
+    if not getattr(db, "vec_extension_loaded", False):
+        return False
+    flag = os.getenv("LORE_SEMANTIC_SEARCH", "false").strip().lower()
+    return flag == "true"
+
+
+def _embed_kb_entry(
+    kb_id: str,
+    title: str,
+    content: str,
+    *,
+    expected_hash: str | None = None,
+) -> tuple[bool, str | None]:
+    """Embed a KB entry and upsert into vec0 + meta tables.
+
+    Best-effort: failures are logged but do not raise. Returns ``(ok, content_hash)``.
+    When ``expected_hash`` matches the meta row, the embed is skipped and the
+    function returns ``(True, expected_hash)``.
+    """
+    try:
+        from lore.embeddings import (
+            EMBEDDING_DIM,
+            EmbeddingUnavailableError,
+            compute_content_hash,
+            encode_text,
+        )
+        from lore.embeddings import _model_name as _embedder_model_name
+    except ImportError as exc:
+        logger.warning("Embeddings module not importable: %s", exc)
+        return False, None
+
+    content_hash = compute_content_hash(title, content)
+    if expected_hash is not None and expected_hash == content_hash:
+        return True, content_hash
+
+    try:
+        vector = encode_text(f"{title}\n\n{content}")
+    except EmbeddingUnavailableError as exc:
+        logger.warning("Skipping embed for %s: %s", kb_id, exc)
+        return False, content_hash
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to encode kb entry %s: %s", kb_id, exc)
+        return False, content_hash
+
+    if len(vector) != EMBEDDING_DIM:
+        logger.error(
+            "Embedding dim mismatch for %s: got %d, expected %d",
+            kb_id,
+            len(vector),
+            EMBEDDING_DIM,
+        )
+        return False, content_hash
+
+    try:
+        import sqlite_vec
+    except ImportError as exc:
+        logger.warning("sqlite-vec not importable at write time: %s", exc)
+        return False, content_hash
+
+    try:
+        conn = db._get_connection()
+        blob = sqlite_vec.serialize_float32(vector)
+        # Upsert into vec0: delete-then-insert; vec0 doesn't support INSERT OR REPLACE.
+        conn.execute("DELETE FROM knowledge_kb_vec_embeddings WHERE kb_id = ?", (kb_id,))
+        conn.execute(
+            "INSERT INTO knowledge_kb_vec_embeddings(kb_id, embedding) VALUES(?, ?)",
+            (kb_id, blob),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO knowledge_kb_embedding_meta "
+            "(kb_id, model_name, embedding_dim, content_hash, updated_at) "
+            "VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+            (kb_id, _embedder_model_name(), EMBEDDING_DIM, content_hash),
+        )
+        conn.commit()
+        return True, content_hash
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to persist embedding for %s: %s", kb_id, exc)
+        return False, content_hash
+
+
+def _delete_kb_embedding(kb_id: str) -> None:
+    """Remove vec0 + meta rows for ``kb_id``. Idempotent / best-effort."""
+    if os.getenv("DB_BACKEND", "").strip().lower() != "sqlite":
+        return
+    if not getattr(db, "vec_extension_loaded", False):
+        return
+    try:
+        conn = db._get_connection()
+        conn.execute("DELETE FROM knowledge_kb_vec_embeddings WHERE kb_id = ?", (kb_id,))
+        # FK cascade should clear knowledge_kb_embedding_meta on its own when the
+        # KB row is gone — but the row is gone before we get here, so be explicit.
+        conn.execute("DELETE FROM knowledge_kb_embedding_meta WHERE kb_id = ?", (kb_id,))
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to delete embedding for %s: %s", kb_id, exc)
+
+
+def _get_embedding_meta(kb_id: str) -> dict | None:
+    """Return embedding_meta row for ``kb_id`` or None."""
+    if os.getenv("DB_BACKEND", "").strip().lower() != "sqlite":
+        return None
+    if not getattr(db, "vec_extension_loaded", False):
+        return None
+    try:
+        conn = db._get_connection()
+        cur = conn.execute(
+            "SELECT kb_id, model_name, embedding_dim, content_hash, created_at, updated_at "
+            "FROM knowledge_kb_embedding_meta WHERE kb_id = ?",
+            (kb_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "kb_id": row[0],
+            "model_name": row[1],
+            "embedding_dim": row[2],
+            "content_hash": row[3],
+            "created_at": row[4],
+            "updated_at": row[5],
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to read embedding meta for %s: %s", kb_id, exc)
+        return None
+
+
 def handle_kb_add(
     topic: str,
     title: str,
@@ -804,9 +937,21 @@ def handle_kb_add(
 
         db.table("knowledge.kb_entries").insert(entry).execute()
 
+        # Best-effort embed at write time. The KB entry succeeds even if the
+        # embedder fails (e.g. model download in flight). Backfill recovers.
+        embedded = False
+        if _semantic_write_enabled():
+            embedded, _ = _embed_kb_entry(kb_id, title, content)
+
         return ResponseEnvelope.success(
             f"Added KB entry: {title}",
-            {"kb_id": kb_id, "topic": topic, "author": author, "source_type": source_type},
+            {
+                "kb_id": kb_id,
+                "topic": topic,
+                "author": author,
+                "source_type": source_type,
+                "embedded": embedded,
+            },
         )
     except Exception as e:
         logger.error(f"Error adding KB entry: {e}")
@@ -1085,10 +1230,31 @@ def handle_kb_update(
             .execute()
         )
 
+        # Re-embed only if title or content changed. We compare against the
+        # stored content_hash to avoid wasted encode calls.
+        re_embedded = False
+        if _semantic_write_enabled() and updated_result and updated_result.data:
+            updated_entry = updated_result.data
+            new_title = updated_entry.get("title") or existing_entry.get("title") or ""
+            new_content = updated_entry.get("content") or existing_entry.get("content") or ""
+            meta = _get_embedding_meta(entry_id)
+            existing_hash = meta["content_hash"] if meta else None
+            re_embedded, _ = _embed_kb_entry(
+                entry_id,
+                new_title,
+                new_content,
+                expected_hash=existing_hash,
+            )
+
         updated_fields = list(update_data.keys())
         return ResponseEnvelope.success(
             f"Updated KB entry '{existing_entry['title']}' (fields: {', '.join(updated_fields)})",
-            {"kb_id": entry_id, "updated_fields": updated_fields, "entry": updated_result.data},
+            {
+                "kb_id": entry_id,
+                "updated_fields": updated_fields,
+                "entry": updated_result.data,
+                "re_embedded": re_embedded,
+            },
         )
 
     except Exception as e:
@@ -1125,11 +1291,14 @@ def handle_kb_delete(entry_id: str, confirm: bool = False) -> dict:
         deleted_entry = existing_result.data
         entry_title = deleted_entry.get("title", "Untitled")
 
-        # Delete the entry
+        # Delete the entry FIRST. SQLite vec0 tables don't support FK cascade,
+        # but the embedding_meta row will cascade via the regular ON DELETE CASCADE
+        # since it references knowledge_kb_entries.
         db.table("knowledge.kb_entries").delete().eq("kb_id", entry_id).execute()
 
-        # Note: In a full implementation, you would also delete associated embeddings/vectors here
-        # This is simplified for the basic CRUD operation.
+        # Then clean up the vec0 row (and meta row defensively, in case PRAGMA
+        # foreign_keys is off on this connection).
+        _delete_kb_embedding(entry_id)
 
         return ResponseEnvelope.success(
             f"Deleted KB entry '{entry_title}' ({entry_id})",
