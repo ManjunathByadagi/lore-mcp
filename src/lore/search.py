@@ -226,7 +226,8 @@ def _pg_format_vector_literal(vector: list[float]) -> str:
     pgvector accepts the form ``[0.1,0.2,...]`` (no spaces, square brackets)
     when cast with ``::vector`` or ``::halfvec``. We do the formatting
     ourselves so we don't require ``pgvector[psycopg2]`` registration to
-    be active on every connection.
+    be active on every connection. Duplicated (intentionally) in lore.server
+    so the write path and read path stay decoupled.
     """
     return "[" + ",".join(repr(float(x)) for x in vector) + "]"
 

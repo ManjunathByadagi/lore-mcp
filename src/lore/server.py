@@ -825,15 +825,43 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
 
 
 def _semantic_write_enabled() -> bool:
-    """Whether to embed on the KB write path. SQLite + vec0 only for MVP."""
-    backend = os.getenv("DB_BACKEND", "").strip().lower()
-    if backend != "sqlite":
-        # PostgreSQL semantic write path: Phase 2.
-        return False
-    if not getattr(db, "vec_extension_loaded", False):
-        return False
+    """Whether to embed on the KB write path.
+
+    True iff:
+      - ``LORE_SEMANTIC_SEARCH=true``, AND
+      - the backend is SQLite with sqlite-vec loaded, OR
+      - the backend is local/postgres with pgvector loaded.
+    """
     flag = os.getenv("LORE_SEMANTIC_SEARCH", "false").strip().lower()
-    return flag == "true"
+    if flag != "true":
+        return False
+    backend = os.getenv("DB_BACKEND", "").strip().lower()
+    if backend == "sqlite":
+        return bool(getattr(db, "vec_extension_loaded", False))
+    if backend in {"local", "postgres", "postgresql"}:
+        return bool(getattr(db, "vec_extension_loaded", False))
+    return False
+
+
+def _backend_kind() -> str:
+    """Return ``"sqlite"`` | ``"postgres"`` | ``""`` based on DB_BACKEND."""
+    backend = os.getenv("DB_BACKEND", "").strip().lower()
+    if backend == "sqlite":
+        return "sqlite"
+    if backend in {"local", "postgres", "postgresql"}:
+        return "postgres"
+    return ""
+
+
+def _pg_format_vector_literal(vector: list[float]) -> str:
+    """Format a Python list of floats as a pgvector literal string.
+
+    pgvector parses ``"[0.1,0.2,...]"`` for both ``vector`` and ``halfvec``
+    types when an explicit cast (``::vector`` / ``::halfvec``) is applied.
+    We format the string ourselves so the code path doesn't depend on
+    ``pgvector[psycopg2]`` adapter registration at runtime.
+    """
+    return "[" + ",".join(repr(float(x)) for x in vector) + "]"
 
 
 def _embed_kb_entry(
@@ -883,6 +911,17 @@ def _embed_kb_entry(
         )
         return False, content_hash
 
+    backend = _backend_kind()
+    if backend == "postgres":
+        return _persist_embedding_postgres(
+            kb_id,
+            vector,
+            content_hash,
+            _embedder_model_name(),
+            EMBEDDING_DIM,
+        )
+
+    # SQLite (default).
     try:
         import sqlite_vec
     except ImportError as exc:
@@ -911,47 +950,144 @@ def _embed_kb_entry(
         return False, content_hash
 
 
+def _persist_embedding_postgres(
+    kb_id: str,
+    vector: list[float],
+    content_hash: str,
+    model_name: str,
+    dims: int,
+) -> tuple[bool, str | None]:
+    """UPSERT a single embedding into ``knowledge.kb_embeddings`` on PostgreSQL.
+
+    Returns ``(ok, content_hash)``. Best-effort: failures are logged but
+    don't raise. Uses ``ON CONFLICT (kb_id) DO UPDATE`` so concurrent writers
+    converge on the latest vector.
+    """
+    if not getattr(db, "vec_extension_loaded", False):
+        return False, content_hash
+
+    vt = getattr(db, "vector_type", "vector")
+    vec_literal = _pg_format_vector_literal(vector)
+
+    try:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f"""
+                INSERT INTO knowledge.kb_embeddings
+                    (kb_id, embedding, content_hash, model_name, model_dims)
+                VALUES (%s, %s::{vt}, %s, %s, %s)
+                ON CONFLICT (kb_id) DO UPDATE SET
+                    embedding    = EXCLUDED.embedding,
+                    content_hash = EXCLUDED.content_hash,
+                    model_name   = EXCLUDED.model_name,
+                    model_dims   = EXCLUDED.model_dims,
+                    embedded_at  = NOW()
+                """,
+                (kb_id, vec_literal, content_hash, model_name, int(dims)),
+            )
+        finally:
+            cursor.close()
+        return True, content_hash
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to persist PG embedding for %s: %s", kb_id, exc)
+        return False, content_hash
+
+
 def _delete_kb_embedding(kb_id: str) -> None:
-    """Remove vec0 + meta rows for ``kb_id``. Idempotent / best-effort."""
-    if os.getenv("DB_BACKEND", "").strip().lower() != "sqlite":
-        return
+    """Remove embedding row(s) for ``kb_id``. Idempotent / best-effort.
+
+    SQLite: clears the vec0 row and the meta row explicitly because vec0
+    doesn't participate in FK cascades.
+
+    PostgreSQL: ``knowledge.kb_embeddings`` has ``ON DELETE CASCADE`` from
+    ``kb_entries`` so the row is already gone by the time this runs after
+    a successful kb_entries DELETE. The explicit DELETE here is defensive —
+    safe to issue even when the cascade already cleared it.
+    """
+    backend = _backend_kind()
     if not getattr(db, "vec_extension_loaded", False):
         return
     try:
-        conn = db._get_connection()
-        conn.execute("DELETE FROM knowledge_kb_vec_embeddings WHERE kb_id = ?", (kb_id,))
-        # FK cascade should clear knowledge_kb_embedding_meta on its own when the
-        # KB row is gone — but the row is gone before we get here, so be explicit.
-        conn.execute("DELETE FROM knowledge_kb_embedding_meta WHERE kb_id = ?", (kb_id,))
-        conn.commit()
+        if backend == "postgres":
+            conn = db._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "DELETE FROM knowledge.kb_embeddings WHERE kb_id = %s",
+                    (kb_id,),
+                )
+            finally:
+                cursor.close()
+            return
+        if backend == "sqlite":
+            conn = db._get_connection()
+            conn.execute("DELETE FROM knowledge_kb_vec_embeddings WHERE kb_id = ?", (kb_id,))
+            # FK cascade should clear knowledge_kb_embedding_meta on its own when the
+            # KB row is gone — but the row is gone before we get here, so be explicit.
+            conn.execute("DELETE FROM knowledge_kb_embedding_meta WHERE kb_id = ?", (kb_id,))
+            conn.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to delete embedding for %s: %s", kb_id, exc)
 
 
 def _get_embedding_meta(kb_id: str) -> dict | None:
-    """Return embedding_meta row for ``kb_id`` or None."""
-    if os.getenv("DB_BACKEND", "").strip().lower() != "sqlite":
-        return None
+    """Return embedding metadata for ``kb_id`` or None.
+
+    On SQLite this reads ``knowledge_kb_embedding_meta``. On PostgreSQL it
+    reads ``knowledge.kb_embeddings`` (which carries the same metadata
+    columns inline with the vector). Returns a dict with stable keys
+    regardless of backend: ``kb_id, model_name, embedding_dim, content_hash``
+    (plus ``updated_at`` on SQLite / ``embedded_at`` on PG, both surfaced as
+    ``updated_at`` for parity).
+    """
     if not getattr(db, "vec_extension_loaded", False):
         return None
+    backend = _backend_kind()
     try:
-        conn = db._get_connection()
-        cur = conn.execute(
-            "SELECT kb_id, model_name, embedding_dim, content_hash, created_at, updated_at "
-            "FROM knowledge_kb_embedding_meta WHERE kb_id = ?",
-            (kb_id,),
-        )
-        row = cur.fetchone()
-        if row is None:
-            return None
-        return {
-            "kb_id": row[0],
-            "model_name": row[1],
-            "embedding_dim": row[2],
-            "content_hash": row[3],
-            "created_at": row[4],
-            "updated_at": row[5],
-        }
+        if backend == "postgres":
+            conn = db._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT kb_id, model_name, model_dims, content_hash, "
+                    "       embedded_at, embedded_at "
+                    "FROM knowledge.kb_embeddings WHERE kb_id = %s",
+                    (kb_id,),
+                )
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+            if row is None:
+                return None
+            return {
+                "kb_id": row[0],
+                "model_name": row[1],
+                "embedding_dim": row[2],
+                "content_hash": row[3],
+                "created_at": row[4].isoformat() if row[4] is not None else None,
+                "updated_at": row[5].isoformat() if row[5] is not None else None,
+            }
+        if backend == "sqlite":
+            conn = db._get_connection()
+            cur = conn.execute(
+                "SELECT kb_id, model_name, embedding_dim, content_hash, created_at, updated_at "
+                "FROM knowledge_kb_embedding_meta WHERE kb_id = ?",
+                (kb_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {
+                "kb_id": row[0],
+                "model_name": row[1],
+                "embedding_dim": row[2],
+                "content_hash": row[3],
+                "created_at": row[4],
+                "updated_at": row[5],
+            }
+        return None
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to read embedding meta for %s: %s", kb_id, exc)
         return None
