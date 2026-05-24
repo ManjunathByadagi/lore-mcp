@@ -212,12 +212,41 @@ _TOOL_DEFINITIONS = [
     ),
     types.Tool(
         name="kb_search",
-        description="Search knowledge base",
+        description=(
+            "Search knowledge base. Lexical FTS5 (or LIKE fallback) by default; "
+            "set semantic=true / hybrid=true / search_mode=hybrid to use vector "
+            "embeddings + RRF fusion (requires LORE_SEMANTIC_SEARCH=true)."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search query"},
                 "topic": {"type": "string", "description": "Filter by topic"},
+                "top_k": {
+                    "type": "integer",
+                    "default": 20,
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Number of results to return (default 20).",
+                },
+                "semantic": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Force semantic (vector) search only. Shortcut for search_mode='semantic'.",
+                },
+                "hybrid": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Force hybrid (FTS5 + vector + RRF). Shortcut for search_mode='hybrid'.",
+                },
+                "search_mode": {
+                    "type": "string",
+                    "enum": ["fts", "semantic", "hybrid"],
+                    "description": (
+                        "Explicit search mode. Overrides semantic/hybrid flags. "
+                        "Falls back to FTS when semantic is unavailable."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -784,13 +813,115 @@ def handle_kb_add(
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_kb_search(query: str, topic: str = None) -> dict:
-    """Search KB entries using PostgreSQL full-text search."""
+def handle_kb_search(
+    query: str,
+    topic: str = None,
+    top_k: int = 20,
+    semantic: bool = False,
+    hybrid: bool = False,
+    search_mode: str = None,
+) -> dict:
+    """Search KB entries.
+
+    Routing (in order):
+      1. If ``search_mode`` is given, use it verbatim ("fts" | "semantic" | "hybrid").
+      2. Else if ``semantic=True``, use "semantic".
+      3. Else if ``hybrid=True``, use "hybrid".
+      4. Else fall back to legacy lexical search (existing FTS / LIKE path).
+
+    Semantic and hybrid modes require ``LORE_SEMANTIC_SEARCH=true`` and the
+    [semantic] extras. When unavailable, the call degrades to lexical search.
+    """
     try:
-        # Sanitize query to prevent PostgREST filter injection (e.g. "x,content.wfts.secret")
+        from lore import search as _search  # local import: tolerant of degraded envs
+
+        # Determine the requested mode.
+        if search_mode in {"fts", "semantic", "hybrid"}:
+            requested_mode: str = search_mode
+        elif semantic:
+            requested_mode = "semantic"
+        elif hybrid:
+            requested_mode = "hybrid"
+        else:
+            requested_mode = "fts"
+
+        # Bound top_k defensively (schema already constrains 1..200, but the
+        # handler is also invoked from internal callers).
+        try:
+            top_k_int = int(top_k)
+        except (TypeError, ValueError):
+            top_k_int = 20
+        top_k_int = max(1, min(200, top_k_int))
+
+        # Decide whether we can actually use the semantic/hybrid path.
+        backend = os.getenv("DB_BACKEND", "").strip().lower()
+        is_sqlite = backend == "sqlite"
+        wants_vectors = requested_mode in {"semantic", "hybrid"}
+
+        # The SQLite hybrid path needs:
+        #   - semantic enabled
+        #   - vec0 extension loaded on the connection
+        #   - fts5 available for hybrid mode
+        #   - an embedder we can call
+        sqlite_vectors_ok = (
+            is_sqlite and _search.semantic_enabled() and getattr(db, "vec_extension_loaded", False)
+        )
+
+        if wants_vectors and sqlite_vectors_ok:
+            from lore.embeddings import EmbeddingUnavailableError, encode_text
+
+            def _encode_query(q: str) -> list[float] | None:
+                try:
+                    return encode_text(q)
+                except EmbeddingUnavailableError as exc:
+                    logger.warning("Embedding unavailable, falling back: %s", exc)
+                    return None
+
+            effective_mode = requested_mode
+            if effective_mode == "hybrid" and not getattr(db, "fts5_available", False):
+                effective_mode = "semantic"
+
+            results = _search.hybrid_search_sqlite(
+                db,
+                query,
+                topic=topic,
+                top_k=top_k_int,
+                search_mode=effective_mode,
+                encode_query=_encode_query,
+            )
+            return ResponseEnvelope.success(
+                f"Found {len(results)} KB entries (mode={effective_mode})",
+                {
+                    "results": results,
+                    "count": len(results),
+                    "search_mode": effective_mode,
+                    "requested_mode": requested_mode,
+                },
+            )
+
+        # SQLite FTS5-only fast path (no embeddings required).
+        if (
+            is_sqlite
+            and requested_mode == "fts"
+            and getattr(db, "fts5_available", False)
+            and _search.semantic_enabled()
+        ):
+            results = _search.fts5_search_sqlite(db, query, topic, top_k_int)
+            # Strip content from response (consistent with hybrid path).
+            results = [{k: v for k, v in r.items() if k != "content"} for r in results]
+            return ResponseEnvelope.success(
+                f"Found {len(results)} KB entries (mode=fts)",
+                {
+                    "results": results,
+                    "count": len(results),
+                    "search_mode": "fts",
+                    "requested_mode": requested_mode,
+                },
+            )
+
+        # Legacy lexical search path. Preserves today's behavior on SQLite (LIKE
+        # via SqliteTableQuery.or_) and PostgreSQL (websearch_to_tsquery).
         safe_query = _sanitize_search_query(query)
-        # Sanitize query for tsquery - replace spaces with & for AND logic
-        # This makes "Phase 2" search for "Phase & 2"
         tsquery_safe = _sanitize_search_query(query).replace(" ", " & ")
 
         query_builder = db.table("knowledge.kb_entries").select(
@@ -800,24 +931,32 @@ def handle_kb_search(query: str, topic: str = None) -> dict:
         if topic:
             query_builder = query_builder.eq("topic", topic)
 
-        # Use PostgreSQL full-text search with websearch syntax (most forgiving)
-        # This leverages the GIN index: idx_kb_search on to_tsvector('english', title || ' ' || content)
-        # PostgREST will use the index automatically when we search on title or content
         try:
-            # Try websearch FTS first (most flexible - handles phrases, AND/OR)
             query_builder = query_builder.or_(f"title.wfts.{safe_query},content.wfts.{safe_query}")
         except Exception as fts_error:
-            # Fallback to plain text FTS if websearch fails
             logger.warning(f"Websearch FTS failed, using plain FTS: {fts_error}")
             query_builder = query_builder.or_(
                 f"title.plfts.{tsquery_safe},content.plfts.{tsquery_safe}"
             )
 
-        result = query_builder.limit(50).execute()
+        result = query_builder.limit(max(top_k_int, 50)).execute()
+
+        envelope_data = {
+            "results": result.data,
+            "count": len(result.data),
+            "search_mode": "lexical",
+            "requested_mode": requested_mode,
+        }
+        if wants_vectors and not sqlite_vectors_ok:
+            envelope_data["degraded"] = True
+            envelope_data["degraded_reason"] = (
+                "semantic search unavailable (LORE_SEMANTIC_SEARCH=false, "
+                "sqlite-vec missing, or non-SQLite backend); served lexical results"
+            )
 
         return ResponseEnvelope.success(
             f"Found {len(result.data)} KB entries",
-            {"results": result.data, "count": len(result.data)},
+            envelope_data,
         )
     except Exception as e:
         logger.error(f"Error searching KB: {e}")
