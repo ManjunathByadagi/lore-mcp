@@ -125,9 +125,12 @@ async def lore_lifespan(server: FastMCP):  # noqa: ANN201 - FastMCP lifespan sig
     zero-friction boot.
     """
     os.environ.setdefault("DB_BACKEND", "sqlite")
-    _srv.db = get_db_client()
-    backend = os.getenv("DB_BACKEND", "sqlite")
-    logger.info("Lore FastMCP lifespan: DB backend = %s", backend)
+    try:
+        _srv.db = get_db_client()
+        logger.info("DB backend: %s", os.getenv("DB_BACKEND", "sqlite"))
+    except Exception as exc:
+        logger.error("FATAL: database initialization failed: %s", exc)
+        raise  # abort startup — do not run with db=None
 
     if _semantic_enabled():
         try:
@@ -486,7 +489,7 @@ def cluster_results(results: list[dict], num_clusters: int = 5) -> str:
 # HTTP routes: plain JSON-RPC (/mcp and /jsonrpc), health, native /stream.
 # ===========================================================================
 
-PROTOCOL_VERSION = "2025-06-18"
+PROTOCOL_VERSION = "2025-11-25"
 
 
 async def _tools_list_payload() -> list[dict]:
@@ -517,7 +520,7 @@ async def _jsonrpc_dispatch(request: Request) -> JSONResponse:
 
     if method == "initialize":
         result = {
-            "protocolVersion": params.get("protocolVersion", PROTOCOL_VERSION),
+            "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": "knowledge-mcp", "version": "0.6.0"},
         }
@@ -655,9 +658,20 @@ def main() -> None:
         host = args.host or "127.0.0.1"
         port = args.port or 5556
         logger.info("Starting Lore FastMCP HTTP server on %s:%s", host, port)
-        # Native Streamable HTTP transport mounted at /stream (json_response +
-        # stateless). Custom /mcp, /jsonrpc, /health routes registered above
-        # are served alongside it.
+        # /stream — FastMCP native Streamable-HTTP transport (MCP spec 2025-03-26).
+        #
+        # This endpoint is CURRENTLY UNUSED by production clients: the existing
+        # ~/.mcp.json configurations point to /mcp (plain JSON-RPC, no SSE framing)
+        # which is preserved for backward compatibility via the custom_route handlers
+        # defined above. /jsonrpc is an alias for the same dispatcher.
+        #
+        # /stream is retained as the forward-compatible upgrade path. When clients
+        # migrate to the native MCP Streamable-HTTP transport they can switch their
+        # endpoint URL from /mcp to /stream with no other changes required.
+        #
+        # stateless_http=True: no session state between requests (safe for
+        #   load-balanced / single-process deployments).
+        # json_response=True: responses are JSON rather than SSE event-stream.
         mcp.run(
             transport="http",
             host=host,
