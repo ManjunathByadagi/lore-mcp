@@ -69,10 +69,23 @@ class LoreClient:
         }
         resp = self._client.post(f"{self.url}/mcp", json=payload)
         resp.raise_for_status()
-        body: dict[str, Any] = resp.json()
+
+        # Server returns SSE-framed responses: "event: message\ndata: {...}\n\n"
+        # Extract the JSON payload from the "data: " line.
+        raw = resp.text
+        body_str: str | None = None
+        for line in raw.splitlines():
+            if line.startswith("data: "):
+                body_str = line[len("data: ") :]
+                break
+        if body_str is None:
+            # Server returned bare JSON (alternative endpoint or future behaviour change)
+            body_str = raw
+
+        body: dict[str, Any] = json.loads(body_str)
 
         # Surface JSON-RPC-level errors
-        if "error" in body:
+        if "error" in body and body["error"] is not None:
             err = body["error"]
             raise LoreClientError(
                 code=err.get("code", -1),
