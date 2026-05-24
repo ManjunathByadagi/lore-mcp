@@ -90,7 +90,10 @@ Powered by local sentence-transformers embeddings (no API key, no external calls
 
 ### Enable it
 
+> **Heads up:** Semantic search is feature-complete and shipping in a future release. The v0.6.0 release that included it was yanked from PyPI on 2026-05-24 while we set up a proper staging and end-to-end testing pipeline. You can run it from source today by cloning the repo and running `pip install -e ".[semantic]"`.
+
 ```bash
+# Once a stable release is published:
 pip install lore-knowledge-mcp[semantic]
 LORE_SEMANTIC_SEARCH=true lore-mcp
 ```
@@ -143,6 +146,8 @@ pip install lore-knowledge-mcp
 ```
 
 ### Optional: semantic search
+
+> **Note:** The v0.6.0 PyPI release was yanked — see [Semantic Search](#semantic-search-v060) for current install status.
 
 ```bash
 pip install lore-knowledge-mcp[semantic]

@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [0.6.0] - 2026-05-24
 
+> **Note:** This release was yanked from PyPI on 2026-05-24. Existing installs continue to work; new installs will skip this version. A successor release will follow once the staging and end-to-end testing pipeline is established. The feature set remains intact and accurate.
+
 ### Added
 - **Semantic & Hybrid Search** (Issue #6) — Lore now finds entries by meaning, not just keywords
   - Local sentence-transformers embeddings via ONNX (no API key, no external calls)
