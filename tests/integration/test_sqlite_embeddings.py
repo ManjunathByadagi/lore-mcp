@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = [
     pytest.mark.slow,
     pytest.mark.integration,
@@ -62,9 +61,7 @@ def test_sqlite_vec_extension_loads(fresh_server):
 
 def test_kb_add_creates_embedding(fresh_server):
     s = fresh_server
-    resp = s.handle_kb_add(
-        topic="t", title="Python async", content="asyncio coroutines"
-    )
+    resp = s.handle_kb_add(topic="t", title="Python async", content="asyncio coroutines")
     assert resp["ok"] is True
     assert resp["data"]["embedded"] is True
 

@@ -1,9 +1,10 @@
 """Test configuration for Knowledge MCP tests."""
 
-import pytest
-import tempfile
 import os
+import tempfile
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture(scope="session")
@@ -19,11 +20,11 @@ def clean_environment():
     # Store original values
     original_env = {}
     env_vars_to_clean = [
-        'DATABASE_URL',
-        'SUPABASE_URL',
-        'SUPABASE_ANON_KEY',
-        'KNOWLEDGE_DATA_DIR',
-        'KNOWLEDGE_LOG_LEVEL'
+        "DATABASE_URL",
+        "SUPABASE_URL",
+        "SUPABASE_ANON_KEY",
+        "KNOWLEDGE_DATA_DIR",
+        "KNOWLEDGE_LOG_LEVEL",
     ]
 
     for var in env_vars_to_clean:
@@ -41,17 +42,17 @@ def clean_environment():
 @pytest.fixture
 def json_backend_env(temp_test_dir, clean_environment):
     """Set up environment for JSON backend testing."""
-    os.environ['KNOWLEDGE_DATA_DIR'] = str(temp_test_dir)
-    os.environ['KNOWLEDGE_LOG_LEVEL'] = 'DEBUG'
+    os.environ["KNOWLEDGE_DATA_DIR"] = str(temp_test_dir)
+    os.environ["KNOWLEDGE_LOG_LEVEL"] = "DEBUG"
     yield
 
 
 @pytest.fixture
 def database_backend_env(clean_environment):
     """Set up environment for database backend testing."""
-    if os.getenv('TEST_DATABASE_URL'):
-        os.environ['DATABASE_URL'] = os.getenv('TEST_DATABASE_URL')
-        os.environ['KNOWLEDGE_LOG_LEVEL'] = 'DEBUG'
+    if os.getenv("TEST_DATABASE_URL"):
+        os.environ["DATABASE_URL"] = os.getenv("TEST_DATABASE_URL")
+        os.environ["KNOWLEDGE_LOG_LEVEL"] = "DEBUG"
         yield
     else:
         pytest.skip("Database tests require TEST_DATABASE_URL environment variable")
@@ -60,12 +61,6 @@ def database_backend_env(clean_environment):
 # Add markers for different test types
 def pytest_configure(config):
     """Configure pytest markers."""
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests"
-    )
-    config.addinivalue_line(
-        "markers", "database: marks tests as requiring database"
-    )
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow running"
-    )
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
+    config.addinivalue_line("markers", "database: marks tests as requiring database")
+    config.addinivalue_line("markers", "slow: marks tests as slow running")

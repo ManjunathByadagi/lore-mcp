@@ -285,3 +285,127 @@ mypy src/lore/ --ignore-missing-imports
 | `include_content` param on `kb_search` | Issue #6 | Return full entry content in search results (currently stripped for payload size) |
 | Telemetry + hard-negative mining | Issue #5 | Collect query/click data to improve model fine-tuning |
 | FastMCP migration | Issue #7 | Replace raw `mcp` library with FastMCP; enables clean lifespan hooks for model pre-loading |
+
+---
+
+## End-to-end testing
+
+The `tests/e2e/` package provides a full HTTP-level test harness that runs
+against a deployed Lore instance.  Tests are automatically **skipped** when no
+live endpoint is configured, so they are safe to collect in CI at all times.
+
+### Prerequisites
+
+```
+pip install -e ".[dev]"          # includes httpx, pyyaml, pytest
+```
+
+The harness does **not** require the `[semantic]` extra — it talks to the server
+over HTTP and never loads the embedding model locally.
+
+### Running tests
+
+```bash
+# Against the staging LXC
+LORE_E2E_URL=http://lore-staging:5555 pytest tests/e2e/ -v
+
+# Against a local dev server on port 5555
+LORE_E2E_URL=http://localhost:5555 pytest tests/e2e/ -v
+
+# Or use the Makefile shortcuts
+make e2e-staging
+make e2e-local
+```
+
+### Test structure
+
+| File | Purpose |
+|---|---|
+| `client.py` | `LoreClient` — thin synchronous `httpx` wrapper around JSON-RPC 2.0 |
+| `conftest.py` | Fixtures: `client`, `session_client`, `cleanup_topic`, `unique_id` |
+| `test_smoke.py` | Service reachability, tools/list shape, embedding-status shape |
+| `test_kb_lifecycle.py` | CRUD cycle: add → get → update → delete |
+| `test_search_modes.py` | Response-shape assertions for `fts`, `semantic`, `hybrid` modes |
+| `test_regression.py` | Corpus-driven rank/match regression suite |
+| `test_backfill.py` | Backfill idempotency and coverage non-regression |
+| `regression_corpus.yaml` | Seed articles + ranked queries for regression tests |
+| `soak_runner.py` | Standalone 24–48 h continuous-load runner (not a pytest file) |
+
+### Regression corpus
+
+`regression_corpus.yaml` contains seed articles and per-article queries.  Each
+query specifies:
+
+- `mode` — `fts`, `semantic`, or `hybrid`
+- `expect_match` — `true` if the seeded article should appear in results
+- `max_rank` — maximum acceptable 1-based rank (when `expect_match: true`)
+
+False-negative queries (`expect_match: false`) verify that unrelated content
+does not contaminate results.
+
+To add a new regression case, append an entry to the YAML and re-run:
+
+```bash
+LORE_E2E_URL=http://lore-staging:5555 pytest tests/e2e/test_regression.py -v
+```
+
+### Soak test
+
+The soak runner exercises the service continuously for 24–48 hours.  It is
+**not** a pytest file — run it directly:
+
+```bash
+# Quick smoke soak (10 minutes)
+LORE_E2E_URL=http://lore-staging:5555 \
+  python3 -m tests.e2e.soak_runner --duration 10m --log-file /tmp/soak.jsonl
+
+# Full 24-hour staging run (use tmux or nohup)
+make soak-staging
+```
+
+#### Failure thresholds
+
+| Metric | Default | Flag |
+|---|---|---|
+| Error rate (5-min rolling window) | > 1 % | `--error-threshold 1.0` |
+| P95 latency (any operation) | > 5 000 ms | `--latency-p95-ms 5000` |
+
+The runner exits non-zero (code 1) as soon as either threshold is breached.  Use
+`--window` to change the rolling window from the default 5 minutes.
+
+#### Structured logging
+
+Every event emitted by the soak runner is a single-line JSON object:
+
+```json
+{"ts": "2026-05-24T12:00:00+00:00", "level": "INFO", "msg": "event:op",
+ "event": {"type": "op", "op": "kb_search_hybrid", "ok": true, "latency_ms": 42.3}}
+```
+
+Parse with `jq` for ad-hoc analysis:
+
+```bash
+jq 'select(.event.type == "metrics_summary")' /tmp/soak.jsonl
+```
+
+### CI integration
+
+The e2e suite is designed to be gated behind a `[e2e]` CI label or a separate
+pipeline stage.  The `LORE_E2E_URL` variable must be set for tests to actually
+execute; without it all tests are collected but skipped with a clear message:
+
+```
+SKIPPED [reason] LORE_E2E_URL not set; e2e tests require a live Lore endpoint
+```
+
+Add a dedicated job in your CI configuration:
+
+```yaml
+e2e:
+  needs: [deploy-staging]
+  env:
+    LORE_E2E_URL: http://lore-staging:5555
+  run: |
+    pip install -e ".[dev]"
+    pytest tests/e2e/ -v --tb=short
+```

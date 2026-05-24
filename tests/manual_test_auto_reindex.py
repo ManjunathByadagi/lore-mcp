@@ -18,12 +18,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Set required environment variables
-os.environ['SUPABASE_URL'] = os.getenv('SUPABASE_URL', 'http://localhost:54321')
-os.environ['SUPABASE_KEY'] = os.getenv('SUPABASE_KEY', 'test-key')
-os.environ['SENTRY_DSN'] = ''  # Disable Sentry
+os.environ["SUPABASE_URL"] = os.getenv("SUPABASE_URL", "http://localhost:54321")
+os.environ["SUPABASE_KEY"] = os.getenv("SUPABASE_KEY", "test-key")
+os.environ["SENTRY_DSN"] = ""  # Disable Sentry
 
-from lore.server import handle_mcp_index_search
 from lore import server as server_module
+from lore.server import handle_mcp_index_search
 
 
 def main():
@@ -34,6 +34,7 @@ def main():
 
     # Initialize Supabase client (mock for testing)
     from unittest.mock import Mock
+
     mock_supabase = Mock()
     server_module.supabase = mock_supabase
 
@@ -42,11 +43,12 @@ def main():
     print("-" * 80)
 
     # Mock scanner to return empty results
-    from lore.mcp_index_scanner import MCPIndexScanner
     from datetime import datetime, timedelta
     from unittest.mock import patch
 
-    with patch.object(MCPIndexScanner, 'search_tools', return_value=[]):
+    from lore.mcp_index_scanner import MCPIndexScanner
+
+    with patch.object(MCPIndexScanner, "search_tools", return_value=[]):
         # Mock stale scan time (2 hours ago)
         two_hours_ago = (datetime.utcnow() - timedelta(hours=2)).isoformat() + "Z"
         mock_supabase.table.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = Mock(
@@ -59,14 +61,14 @@ def main():
         print(f"✓ Re-index triggered: {result['data']['re_index_triggered']}")
         print(f"✓ Message: {result['message']}")
 
-        assert result['data']['re_index_triggered'] is True, "Should trigger re-index"
+        assert result["data"]["re_index_triggered"] is True, "Should trigger re-index"
         print("✓ Test 1 PASSED")
 
     # Scenario 2: Empty results + fresh index (should NOT trigger)
     print("\n[Test 2] Empty results + fresh index (<1 hour)")
     print("-" * 80)
 
-    with patch.object(MCPIndexScanner, 'search_tools', return_value=[]):
+    with patch.object(MCPIndexScanner, "search_tools", return_value=[]):
         # Mock fresh scan time (30 minutes ago)
         thirty_minutes_ago = (datetime.utcnow() - timedelta(minutes=30)).isoformat() + "Z"
         mock_supabase.table.return_value.select.return_value.order.return_value.limit.return_value.execute.return_value = Mock(
@@ -79,22 +81,22 @@ def main():
         print(f"✓ Re-index triggered: {result['data']['re_index_triggered']}")
         print(f"✓ Message: {result['message']}")
 
-        assert result['data']['re_index_triggered'] is False, "Should NOT trigger re-index"
+        assert result["data"]["re_index_triggered"] is False, "Should NOT trigger re-index"
         print("✓ Test 2 PASSED")
 
     # Scenario 3: Non-empty results (should never trigger)
     print("\n[Test 3] Non-empty results (never triggers)")
     print("-" * 80)
 
-    with patch.object(MCPIndexScanner, 'search_tools', return_value=[{"tool_name": "kb_search"}]):
+    with patch.object(MCPIndexScanner, "search_tools", return_value=[{"tool_name": "kb_search"}]):
         result = handle_mcp_index_search("search")
 
         print(f"Result: {result}")
         print(f"✓ Re-index triggered: {result['data']['re_index_triggered']}")
         print(f"✓ Results count: {len(result['data']['results'])}")
 
-        assert result['data']['re_index_triggered'] is False, "Should NOT trigger re-index"
-        assert len(result['data']['results']) > 0, "Should have results"
+        assert result["data"]["re_index_triggered"] is False, "Should NOT trigger re-index"
+        assert len(result["data"]["results"]) > 0, "Should have results"
         print("✓ Test 3 PASSED")
 
     print("\n" + "=" * 80)

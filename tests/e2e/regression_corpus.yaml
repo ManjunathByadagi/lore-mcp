@@ -1,0 +1,180 @@
+# Regression corpus for Lore end-to-end search tests.
+#
+# Each entry seeds a KB article then runs one or more queries against it,
+# asserting rank and match expectations.
+#
+# Schema per entry:
+#   id:        unique slug used as the entry's title prefix for traceability
+#   topic:     KB topic to file under (automatically prefixed with "e2e-regression-")
+#   title:     article title
+#   content:   article body (plain text)
+#   queries:
+#     - text:         search query string
+#       mode:         fts | semantic | hybrid
+#       expect_match: true if the seeded entry should appear in results
+#       max_rank:     maximum acceptable 1-based position in the result list
+#                     (only checked when expect_match is true)
+#
+# False-negative entries (expect_match: false) verify that unrelated queries
+# do NOT pollute results — they must appear nowhere in the top-10 results.
+# ---------------------------------------------------------------------------
+
+- id: lxc_dns_tailscale
+  topic: ops
+  title: "LXC Tailscale DNS: container name resolution failing"
+  content: |
+    When running Proxmox LXC containers with Tailscale, DNS resolution for
+    container hostnames breaks after a Tailscale upgrade.  The MagicDNS
+    resolver at 100.100.100.100 stops answering queries for .ts.net addresses
+    from inside the container network namespace.
+
+    Fix: set resolvconf=no in /etc/pve/lxc/<id>.conf, pin the Tailscale
+    package version, and restart the systemd-resolved stub listener:
+      systemctl restart systemd-resolved
+  queries:
+    - text: "DNS broken in containers"
+      mode: hybrid
+      expect_match: true
+      max_rank: 3
+    - text: "container name resolution failing"
+      mode: semantic
+      expect_match: true
+      max_rank: 5
+    - text: "zebra cookies"
+      mode: hybrid
+      expect_match: false
+
+- id: python_async_gather
+  topic: python
+  title: "asyncio.gather: concurrent task execution patterns"
+  content: |
+    asyncio.gather runs multiple coroutines concurrently and collects results.
+    Use return_exceptions=True to prevent one failure from cancelling siblings.
+    Wrap with asyncio.timeout (Python 3.11+) to bound total wall-clock time.
+
+    Example:
+      results = await asyncio.gather(task_a(), task_b(), return_exceptions=True)
+      errors = [r for r in results if isinstance(r, Exception)]
+  queries:
+    - text: "asyncio gather"
+      mode: fts
+      expect_match: true
+      max_rank: 1
+    - text: "asyncio gather"
+      mode: hybrid
+      expect_match: true
+      max_rank: 3
+    - text: "run tasks at the same time in Python"
+      mode: semantic
+      expect_match: true
+      max_rank: 5
+
+- id: postgres_vacuum_bloat
+  topic: database
+  title: "PostgreSQL table bloat and VACUUM tuning"
+  content: |
+    Dead tuples accumulate between autovacuum runs, inflating table size.
+    Monitor with pg_stat_user_tables.n_dead_tup.  Force an immediate cleanup:
+      VACUUM (VERBOSE, ANALYZE) public.kb_entries;
+    Tune autovacuum_vacuum_scale_factor down to 0.01 for write-heavy tables.
+    VACUUM FULL reclaims disk space but takes an exclusive lock; prefer
+    pg_repack for zero-downtime reclamation on production.
+  queries:
+    - text: "vacuum dead tuples postgres"
+      mode: fts
+      expect_match: true
+      max_rank: 2
+    - text: "database storage bloat cleanup"
+      mode: semantic
+      expect_match: true
+      max_rank: 5
+    - text: "Python asyncio gather"
+      mode: hybrid
+      expect_match: false
+
+- id: special_chars_fts
+  topic: edge-cases
+  title: "FTS special characters: apostrophes, hyphens, and Unicode"
+  content: |
+    Full-text search tokenisers handle punctuation differently.  SQLite FTS5
+    strips apostrophes, so "don't" and "dont" match the same token.  Hyphens
+    are treated as token separators: "e-mail" indexes as "e" and "mail".
+    Unicode normalisation (NFC) is applied before tokenisation, so café and
+    café produce identical tokens.  Test queries with special chars to
+    avoid silent mismatches in recall metrics.
+  queries:
+    - text: "apostrophe hyphen unicode fts"
+      mode: fts
+      expect_match: true
+      max_rank: 3
+    - text: "tokenisation punctuation handling"
+      mode: semantic
+      expect_match: true
+      max_rank: 5
+
+- id: multi_word_phrase_semantic
+  topic: networking
+  title: "Wireguard site-to-site VPN between two pfSense firewalls"
+  content: |
+    WireGuard is a modern VPN protocol embedded in the Linux kernel since 5.6.
+    To connect two pfSense instances: install the wireguard package on both,
+    generate keypairs (wg genkey | tee private.key | wg pubkey), configure
+    tunnel interfaces with matching AllowedIPs, and add peer entries using
+    each side's public key and endpoint IP:port.
+    Persistent keepalive (25 s) prevents NAT state from expiring.
+  queries:
+    - text: "site to site VPN tunnel setup"
+      mode: semantic
+      expect_match: true
+      max_rank: 5
+    - text: "WireGuard pfSense configuration"
+      mode: fts
+      expect_match: true
+      max_rank: 3
+    - text: "asyncio gather concurrent"
+      mode: semantic
+      expect_match: false
+
+- id: semantic_only_no_fts_keywords
+  topic: observability
+  title: "Prometheus recording rules for high-cardinality metrics"
+  content: |
+    Recording rules pre-aggregate expensive Prometheus queries so dashboards
+    load instantly.  Define them in a rules file and reference the synthetic
+    metric name in Grafana.  Useful for per-pod CPU percentile calculations
+    where scanning millions of series at query time would exceed the timeout.
+    Use without() to drop high-cardinality labels before aggregation.
+  queries:
+    - text: "speed up slow Grafana dashboard"
+      mode: semantic
+      expect_match: true
+      max_rank: 5
+    - text: "precomputed metrics aggregation"
+      mode: semantic
+      expect_match: true
+      max_rank: 5
+    # FTS on a paraphrase that shares no exact tokens — should still match via semantic
+    - text: "Prometheus recording rules"
+      mode: fts
+      expect_match: true
+      max_rank: 3
+
+- id: fts_only_exact_match
+  topic: devops
+  title: "kubectl rollout restart deployment zero-downtime"
+  content: |
+    Rolling restart of a Kubernetes deployment without downtime:
+      kubectl rollout restart deployment/my-app -n production
+    Kubernetes drains pods one by one, respecting PodDisruptionBudget and
+    maxUnavailable settings.  Watch progress with:
+      kubectl rollout status deployment/my-app --timeout=5m
+    Use this instead of kubectl delete pod to avoid manual pod tracking.
+  queries:
+    - text: "kubectl rollout restart"
+      mode: fts
+      expect_match: true
+      max_rank: 1
+    - text: "restart kubernetes workload without downtime"
+      mode: semantic
+      expect_match: true
+      max_rank: 5
