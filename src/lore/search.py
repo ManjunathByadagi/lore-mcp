@@ -1,10 +1,10 @@
 """Hybrid lexical + semantic search orchestration for lore-mcp.
 
-The MVP focuses on the SQLite backend; the PostgreSQL semantic path is
-deferred to Phase 2 (see Issue #6). When ``LORE_SEMANTIC_SEARCH`` is false
-or the embeddings module / sqlite-vec is unavailable, the search module
-falls back to the legacy lexical search via the Supabase-compatible
-TableQuery interface — preserving today's behavior.
+Supports both SQLite (FTS5 + sqlite-vec) and PostgreSQL (websearch_to_tsquery
++ pgvector HNSW) backends. When ``LORE_SEMANTIC_SEARCH`` is false or the
+embedding model / vector extension is unavailable, the search module falls
+back to the legacy lexical search via the Supabase-compatible TableQuery
+interface — preserving today's behavior.
 """
 
 from __future__ import annotations
@@ -213,6 +213,222 @@ def vector_search_sqlite(
         # ranking position is what matters for RRF.
         rows.append(row)
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Backend-specific search primitives (PostgreSQL)
+# ---------------------------------------------------------------------------
+
+
+def _pg_format_vector_literal(vector: list[float]) -> str:
+    """Format a Python list of floats as a pgvector/halfvec literal string.
+
+    pgvector accepts the form ``[0.1,0.2,...]`` (no spaces, square brackets)
+    when cast with ``::vector`` or ``::halfvec``. We do the formatting
+    ourselves so we don't require ``pgvector[psycopg2]`` registration to
+    be active on every connection.
+    """
+    return "[" + ",".join(repr(float(x)) for x in vector) + "]"
+
+
+def fts_search_postgres(
+    db_client: Any,
+    query: str,
+    topic: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """PostgreSQL full-text search using ``websearch_to_tsquery`` and ``ts_rank_cd``.
+
+    Uses the pre-existing ``idx_kb_search`` GIN index on
+    ``to_tsvector('english', title || ' ' || content)``. Returns rows ordered
+    by descending rank (higher = better).
+    """
+    try:
+        conn = db_client._get_connection()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to acquire PG connection for FTS: %s", exc)
+        return []
+
+    sql = (
+        "SELECT kb_id, title, topic, tags, author, source_type, verified, "
+        "       ts_rank_cd("
+        "           to_tsvector('english', "
+        "               coalesce(title,'') || ' ' || coalesce(content,'')), "
+        "           websearch_to_tsquery('english', %s)"
+        "       ) AS score "
+        "FROM knowledge.kb_entries "
+        "WHERE to_tsvector('english', "
+        "          coalesce(title,'') || ' ' || coalesce(content,'')) "
+        "      @@ websearch_to_tsquery('english', %s)"
+    )
+    params: list[Any] = [query, query]
+    if topic:
+        sql += " AND topic = %s"
+        params.append(topic)
+    sql += " ORDER BY score DESC LIMIT %s"
+    params.append(int(limit))
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, params)
+        col_names = [d[0] for d in cursor.description]
+        rows = [dict(zip(col_names, raw)) for raw in cursor.fetchall()]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PG FTS query failed for %r: %s", query, exc)
+        return []
+    finally:
+        cursor.close()
+    return rows
+
+
+def vector_search_postgres(
+    db_client: Any,
+    query_vector: list[float],
+    topic: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """K-NN cosine search via pgvector HNSW index on ``knowledge.kb_embeddings``.
+
+    Picks ``halfvec`` vs ``vector`` based on ``db_client.vector_type`` so the
+    same code path works on pgvector < 0.7 (fallback) and >= 0.7 (halfvec).
+    Returns rows ordered by ascending cosine distance (best match first).
+    """
+    if not getattr(db_client, "vec_extension_loaded", False):
+        return []
+
+    try:
+        conn = db_client._get_connection()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to acquire PG connection for vector search: %s", exc)
+        return []
+
+    vt = getattr(db_client, "vector_type", "vector")
+    vec_literal = _pg_format_vector_literal(query_vector)
+
+    # Use a CTE so the ORDER BY references the cast vector once.
+    sql = (
+        "SELECT e.kb_id, e.title, e.topic, e.tags, e.author, e.source_type, "
+        "       e.verified, "
+        f"       (em.embedding <=> %s::{vt}) AS distance "
+        "FROM knowledge.kb_embeddings em "
+        "JOIN knowledge.kb_entries e ON e.kb_id = em.kb_id "
+        "WHERE TRUE"
+    )
+    params: list[Any] = [vec_literal]
+    if topic:
+        sql += " AND e.topic = %s"
+        params.append(topic)
+    sql += f" ORDER BY em.embedding <=> %s::{vt} LIMIT %s"
+    params.append(vec_literal)
+    params.append(int(limit))
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, params)
+        col_names = [d[0] for d in cursor.description]
+        rows = [dict(zip(col_names, raw)) for raw in cursor.fetchall()]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PG vector search failed: %s", exc)
+        return []
+    finally:
+        cursor.close()
+    return rows
+
+
+def hybrid_search_postgres(
+    db_client: Any,
+    query: str,
+    *,
+    topic: str | None,
+    top_k: int,
+    search_mode: str,
+    encode_query: Any,
+) -> list[dict[str, Any]]:
+    """Orchestrate FTS + pgvector + RRF on PostgreSQL.
+
+    Mirrors :func:`hybrid_search_sqlite` so :func:`handle_kb_search` can stay
+    backend-agnostic at the response layer.
+
+    Args:
+        db_client: LocalPostgresClient instance.
+        query: User query string.
+        topic: Optional topic filter.
+        top_k: Number of final results to return.
+        search_mode: ``"fts"``, ``"semantic"``, or ``"hybrid"``.
+        encode_query: Callable returning the query embedding, or None when no
+            embedder is available (forces ``fts`` even if ``hybrid`` requested).
+    """
+    try:
+        conn = db_client._get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM knowledge.kb_entries")
+        corpus_size = cur.fetchone()[0]
+        cur.close()
+    except Exception:  # noqa: BLE001
+        corpus_size = 0
+    pool = candidate_pool_size(top_k, corpus_size)
+
+    fts_rows: list[dict[str, Any]] = []
+    vec_rows: list[dict[str, Any]] = []
+
+    if search_mode in {"fts", "hybrid"}:
+        fts_rows = fts_search_postgres(db_client, query, topic, pool)
+
+    if search_mode in {"semantic", "hybrid"} and encode_query is not None:
+        try:
+            query_vec = encode_query(query)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to encode query for PG semantic search: %s", exc)
+            query_vec = None
+        if query_vec is not None and getattr(db_client, "vec_extension_loaded", False):
+            vec_rows = vector_search_postgres(db_client, query_vec, topic, pool)
+
+    if debug_search():
+        logger.info(
+            "pg_search[mode=%s] query=%r fts=%d vec=%d pool=%d corpus=%d",
+            search_mode,
+            query,
+            len(fts_rows),
+            len(vec_rows),
+            pool,
+            corpus_size,
+        )
+
+    if search_mode == "fts":
+        return [_strip_content_for_response(r) for r in fts_rows[:top_k]]
+    if search_mode == "semantic":
+        return [_strip_content_for_response(r) for r in vec_rows[:top_k]]
+
+    # Hybrid: RRF fuse.
+    fts_ids = [r["kb_id"] for r in fts_rows]
+    vec_ids = [r["kb_id"] for r in vec_rows]
+
+    if not fts_ids and not vec_ids:
+        return []
+    if not fts_ids:
+        return [_strip_content_for_response(r) for r in vec_rows[:top_k]]
+    if not vec_ids:
+        return [_strip_content_for_response(r) for r in fts_rows[:top_k]]
+
+    fused = reciprocal_rank_fusion([fts_ids, vec_ids])
+    fused_ids = [kb_id for kb_id, _score in fused[:top_k]]
+
+    row_by_id: dict[str, dict[str, Any]] = {}
+    for r in vec_rows:
+        row_by_id[r["kb_id"]] = r
+    for r in fts_rows:
+        row_by_id[r["kb_id"]] = r
+
+    rrf_score_by_id = dict(fused)
+    results: list[dict[str, Any]] = []
+    for kb_id in fused_ids:
+        row = row_by_id.get(kb_id)
+        if not row:
+            continue
+        out = _strip_content_for_response(row)
+        out["rrf_score"] = rrf_score_by_id.get(kb_id)
+        results.append(out)
+    return results
 
 
 # ---------------------------------------------------------------------------

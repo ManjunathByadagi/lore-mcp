@@ -1049,6 +1049,7 @@ def handle_kb_search(
         # Decide whether we can actually use the semantic/hybrid path.
         backend = os.getenv("DB_BACKEND", "").strip().lower()
         is_sqlite = backend == "sqlite"
+        is_postgres = backend in {"local", "postgres", "postgresql"}
         wants_vectors = requested_mode in {"semantic", "hybrid"}
 
         # The SQLite hybrid path needs:
@@ -1058,6 +1059,16 @@ def handle_kb_search(
         #   - an embedder we can call
         sqlite_vectors_ok = (
             is_sqlite and _search.semantic_enabled() and getattr(db, "vec_extension_loaded", False)
+        )
+
+        # The PostgreSQL hybrid path needs:
+        #   - semantic enabled
+        #   - pgvector extension installed + kb_embeddings table reachable
+        #   - an embedder we can call
+        postgres_vectors_ok = (
+            is_postgres
+            and _search.semantic_enabled()
+            and getattr(db, "vec_extension_loaded", False)
         )
 
         if wants_vectors and sqlite_vectors_ok:
@@ -1097,6 +1108,41 @@ def handle_kb_search(
                 resp_data,
             )
 
+        # PostgreSQL semantic/hybrid path (Phase 2 of Issue #6).
+        if wants_vectors and postgres_vectors_ok:
+            from lore.embeddings import EmbeddingUnavailableError, encode_text, get_model_name
+
+            def _encode_query_pg(q: str) -> list[float] | None:
+                try:
+                    return encode_text(q)
+                except EmbeddingUnavailableError as exc:
+                    logger.warning("Embedding unavailable, falling back: %s", exc)
+                    return None
+
+            results = _search.hybrid_search_postgres(
+                db,
+                query,
+                topic=topic,
+                top_k=top_k_int,
+                search_mode=requested_mode,
+                encode_query=_encode_query_pg,
+            )
+            resp_data = {
+                "results": results,
+                "count": len(results),
+                "search_mode": requested_mode,
+                "requested_mode": requested_mode,
+                "backend": "postgres",
+            }
+            if requested_mode in {"semantic", "hybrid"}:
+                resp_data["model"] = get_model_name()
+            if requested_mode == "hybrid":
+                resp_data["rrf_k"] = _search.rrf_k()
+            return ResponseEnvelope.success(
+                f"Found {len(results)} KB entries (mode={requested_mode})",
+                resp_data,
+            )
+
         # SQLite FTS5-only fast path (no embeddings required).
         if is_sqlite and requested_mode == "fts" and getattr(db, "fts5_available", False):
             results = _search.fts5_search_sqlite(db, query, topic, top_k_int)
@@ -1109,6 +1155,21 @@ def handle_kb_search(
                     "count": len(results),
                     "search_mode": "fts",
                     "requested_mode": requested_mode,
+                },
+            )
+
+        # PostgreSQL FTS-only path (uses the existing GIN index, no embeddings required).
+        if is_postgres and requested_mode == "fts":
+            pg_rows = _search.fts_search_postgres(db, query, topic, top_k_int)
+            pg_rows = [{k: v for k, v in r.items() if k != "content"} for r in pg_rows]
+            return ResponseEnvelope.success(
+                f"Found {len(pg_rows)} KB entries (mode=fts)",
+                {
+                    "results": pg_rows,
+                    "count": len(pg_rows),
+                    "search_mode": "fts",
+                    "requested_mode": requested_mode,
+                    "backend": "postgres",
                 },
             )
 
@@ -1140,11 +1201,12 @@ def handle_kb_search(
             "search_mode": "lexical",
             "requested_mode": requested_mode,
         }
-        if wants_vectors and not sqlite_vectors_ok:
+        if wants_vectors and not (sqlite_vectors_ok or postgres_vectors_ok):
             envelope_data["degraded"] = True
             envelope_data["degraded_reason"] = (
                 "semantic search unavailable (LORE_SEMANTIC_SEARCH=false, "
-                "sqlite-vec missing, or non-SQLite backend); served lexical results"
+                "vector extension not loaded, or embedder missing); "
+                "served lexical results"
             )
 
         return ResponseEnvelope.success(
