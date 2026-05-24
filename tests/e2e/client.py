@@ -242,10 +242,21 @@ class LoreClient:
     def kb_embedding_status(self) -> dict[str, Any]:
         """Return the current embedding-coverage status report.
 
+        The server wraps counts under a ``data`` key; this method unwraps it
+        so callers see ``total_entries``, ``embedded``, ``coverage_pct``, etc.
+        at the top level.
+
         Returns:
-            Dict with ``total``, ``embedded``, ``pending``, ``coverage_pct``, etc.
+            Dict with ``total_entries``, ``embedded``, ``missing``,
+            ``coverage_pct``, etc.
         """
-        return self.tool("kb_embedding_status", {})
+        result = self.tool("kb_embedding_status", {})
+        # Server returns {"ok": True, "data": {...counts...}, ...}
+        # Flatten the inner data dict for convenient test access.
+        inner = result.get("data")
+        if isinstance(inner, dict):
+            return inner
+        return result
 
     def kb_backfill_embeddings(self, **kw: Any) -> dict[str, Any]:
         """Trigger a backfill run to embed any un-embedded entries.
