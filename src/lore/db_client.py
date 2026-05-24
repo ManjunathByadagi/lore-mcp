@@ -125,9 +125,7 @@ class LocalPostgresClient:
         Sets self.vec_extension_loaded, self.pgvector_version, and
         self.vector_type so callers can introspect the live capabilities.
         """
-        semantic_enabled = (
-            os.getenv("LORE_SEMANTIC_SEARCH", "false").strip().lower() == "true"
-        )
+        semantic_enabled = os.getenv("LORE_SEMANTIC_SEARCH", "false").strip().lower() == "true"
         conn = self._conn
         cursor = conn.cursor()
         try:
