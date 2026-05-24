@@ -188,8 +188,17 @@ class LocalPostgresClient:
                         content_hash TEXT NOT NULL,
                         model_name   TEXT NOT NULL,
                         model_dims   INTEGER NOT NULL DEFAULT 384,
+                        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         embedded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
+                    """
+                )
+                # Add created_at to pre-existing tables (idempotent).
+                cursor.execute(
+                    """
+                    ALTER TABLE knowledge.kb_embeddings
+                        ADD COLUMN IF NOT EXISTS
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     """
                 )
                 cursor.execute(
@@ -218,6 +227,7 @@ class LocalPostgresClient:
         except self._psycopg2.Error as exc:
             # Don't crash on schema init failure — degrade gracefully.
             self.vec_extension_loaded = False
+            self._schema_initialized = False  # Allow retry on next reconnect.
             if semantic_enabled:
                 logger.warning(
                     "Failed to initialize kb_embeddings schema: %s. "

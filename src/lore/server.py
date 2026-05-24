@@ -1052,7 +1052,7 @@ def _get_embedding_meta(kb_id: str) -> dict | None:
             try:
                 cursor.execute(
                     "SELECT kb_id, model_name, model_dims, content_hash, "
-                    "       embedded_at, embedded_at "
+                    "       created_at, embedded_at "
                     "FROM knowledge.kb_embeddings WHERE kb_id = %s",
                     (kb_id,),
                 )
