@@ -112,10 +112,10 @@ def cleanup_topic(client: LoreClient) -> str:
 
     # Teardown: delete all entries created under this topic
     try:
-        result = client.kb_list(topic=topic, limit=100)
+        result = client.kb_list(topic=topic)
         entries = result.get("entries") or result.get("results") or []
         for entry in entries:
-            entry_id = entry.get("id")
+            entry_id = entry.get("kb_id")
             if entry_id:
                 try:
                     client.kb_delete(entry_id, confirm=True)
@@ -129,3 +129,14 @@ def cleanup_topic(client: LoreClient) -> str:
 def unique_id() -> str:
     """Return a unique hex string suitable for use in titles / content."""
     return uuid.uuid4().hex
+
+
+@pytest.fixture
+def slow_client(lore_url: str) -> LoreClient:
+    """Fresh :class:`LoreClient` with extended timeout for long-running operations.
+
+    Use this fixture for tests that call ``kb_backfill_embeddings`` or other
+    operations that may take several minutes on a large knowledge base.
+    """
+    with LoreClient(lore_url, timeout=300.0) as c:
+        yield c

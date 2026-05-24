@@ -13,8 +13,12 @@ response carries the MCP-protocol envelope::
         }
     }
 
-:class:`LoreClient` transparently unwraps this double-encoding so callers
-receive the inner payload dict directly.
+Inside that TextContent wrapper Lore adds its own business envelope::
+
+    {"ok": True, "data": {...}, "message": "...", "error": null}
+
+:class:`LoreClient` transparently unwraps both layers so callers receive the
+inner ``data`` dict directly.
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ class LoreClient:
 
         client = LoreClient("http://lore-staging:5555")
         result = client.kb_add(topic="ops", title="DNS fix", content="…")
-        print(result["id"])
+        print(result["kb_id"])
     """
 
     def __init__(self, url: str, timeout: float = 30.0) -> None:
@@ -121,6 +125,29 @@ class LoreClient:
         # Fallback: return the result dict as-is
         return result  # type: ignore[return-value]
 
+    def _unwrap_tool_result(self, jsonrpc_result: dict[str, Any]) -> dict[str, Any]:
+        """Unwrap Lore's business data envelope.
+
+        Every Lore tool response has the shape::
+
+            {"ok": True, "data": {…}, "message": "…", "error": null}
+
+        This method extracts ``data`` on success and raises
+        :class:`LoreClientError` when ``ok`` is ``False``.
+        """
+        if not isinstance(jsonrpc_result, dict):
+            return jsonrpc_result  # type: ignore[return-value]
+        if jsonrpc_result.get("ok") is False:
+            raise LoreClientError(
+                code=-1,
+                message=(
+                    f"Tool failed: {jsonrpc_result.get('error')} — {jsonrpc_result.get('message')}"
+                ),
+            )
+        if "data" in jsonrpc_result and isinstance(jsonrpc_result["data"], dict):
+            return jsonrpc_result["data"]
+        return jsonrpc_result
+
     def tool(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         """Call a named MCP tool and return the unwrapped inner payload.
 
@@ -129,10 +156,12 @@ class LoreClient:
             arguments: Keyword arguments forwarded to the tool.
 
         Returns:
-            The inner payload dict after unwrapping the MCP TextContent envelope.
+            The inner payload dict after unwrapping both the MCP TextContent
+            envelope and Lore's business data envelope.
         """
         rpc = self._call("tools/call", {"name": name, "arguments": arguments or {}})
-        return self._unwrap(rpc)
+        unwrapped = self._unwrap(rpc)
+        return self._unwrap_tool_result(unwrapped)
 
     # ------------------------------------------------------------------
     # Introspection
@@ -176,7 +205,8 @@ class LoreClient:
             **kw: Additional arguments forwarded verbatim (e.g. ``tags``).
 
         Returns:
-            Unwrapped tool response dict, typically ``{"id": "…", "status": "added"}``.
+            Unwrapped tool response dict with ``kb_id``, ``topic``,
+            ``embedded``, etc.
         """
         return self.tool("kb_add", {"topic": topic, "title": title, "content": content, **kw})
 
@@ -186,7 +216,7 @@ class LoreClient:
         Args:
             query: Free-text search query.
             **kw: Optional overrides: ``search_mode`` (``"fts"``, ``"semantic"``,
-                  ``"hybrid"``), ``limit``, ``topic``, etc.
+                  ``"hybrid"``), ``top_k``, ``topic``, etc.
 
         Returns:
             Unwrapped search result dict with ``results`` list.
@@ -197,66 +227,57 @@ class LoreClient:
         """Retrieve a single knowledge-base entry by ID.
 
         Args:
-            kb_id: The entry UUID or slug.
+            kb_id: The entry ID (e.g. ``"kb_abc123"``).
 
         Returns:
             Unwrapped entry dict.
         """
-        return self.tool("kb_get", {"id": kb_id})
+        return self.tool("kb_get", {"kb_id": kb_id})
 
     def kb_update(self, kb_id: str, **kw: Any) -> dict[str, Any]:
         """Update fields of an existing knowledge-base entry.
 
         Args:
-            kb_id: The entry UUID or slug.
-            **kw: Fields to update (e.g. ``content=``, ``title=``).
+            kb_id: The entry ID (e.g. ``"kb_abc123"``).
+            **kw: Fields to update: ``content``, ``tags``, ``topic``,
+                  ``verified``, ``metadata``.
 
         Returns:
             Unwrapped update-result dict.
         """
-        return self.tool("kb_update", {"id": kb_id, **kw})
+        return self.tool("kb_update", {"entry_id": kb_id, **kw})
 
     def kb_delete(self, kb_id: str, confirm: bool = True) -> dict[str, Any]:
         """Delete a knowledge-base entry.
 
         Args:
-            kb_id: The entry UUID or slug.
+            kb_id: The entry ID (e.g. ``"kb_abc123"``).
             confirm: Safety flag — must be ``True`` (default) to actually delete.
 
         Returns:
             Unwrapped deletion-confirmation dict.
         """
-        return self.tool("kb_delete", {"id": kb_id, "confirm": confirm})
+        return self.tool("kb_delete", {"entry_id": kb_id, "confirm": confirm})
 
     def kb_list(self, **kw: Any) -> dict[str, Any]:
         """List knowledge-base entries.
 
         Args:
-            **kw: Optional filters such as ``topic``, ``limit``, ``offset``.
+            **kw: Optional filters such as ``topic``.
 
         Returns:
-            Unwrapped list-result dict.
+            Unwrapped list-result dict with ``entries`` list.
         """
         return self.tool("kb_list", {**kw})
 
     def kb_embedding_status(self) -> dict[str, Any]:
         """Return the current embedding-coverage status report.
 
-        The server wraps counts under a ``data`` key; this method unwraps it
-        so callers see ``total_entries``, ``embedded``, ``coverage_pct``, etc.
-        at the top level.
-
         Returns:
             Dict with ``total_entries``, ``embedded``, ``missing``,
             ``coverage_pct``, etc.
         """
-        result = self.tool("kb_embedding_status", {})
-        # Server returns {"ok": True, "data": {...counts...}, ...}
-        # Flatten the inner data dict for convenient test access.
-        inner = result.get("data")
-        if isinstance(inner, dict):
-            return inner
-        return result
+        return self.tool("kb_embedding_status", {})
 
     def kb_backfill_embeddings(self, **kw: Any) -> dict[str, Any]:
         """Trigger a backfill run to embed any un-embedded entries.

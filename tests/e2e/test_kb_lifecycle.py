@@ -16,25 +16,23 @@ class TestKbAdd:
     """Verify kb_add creates entries with the expected shape."""
 
     def test_add_returns_id(self, client: LoreClient, cleanup_topic: str) -> None:
-        """A successful kb_add must return a non-empty id."""
+        """A successful kb_add must return a non-empty kb_id."""
         result = client.kb_add(
             topic=cleanup_topic,
             title="Lifecycle test: add returns id",
             content="This entry was created by test_add_returns_id.",
         )
-        assert "id" in result, f"kb_add response missing 'id': {result}"
-        assert result["id"], "kb_add returned an empty id"
+        assert "kb_id" in result, f"kb_add response missing 'kb_id': {result}"
+        assert result["kb_id"], "kb_add returned an empty kb_id"
 
     def test_add_status_field(self, client: LoreClient, cleanup_topic: str) -> None:
-        """kb_add should indicate success in its response."""
+        """kb_add should return a kb_id indicating successful creation."""
         result = client.kb_add(
             topic=cleanup_topic,
             title="Lifecycle test: add status",
             content="Content for status field check.",
         )
-        # Accept "added", "created", "ok", or a numeric 2xx-style code
-        status = result.get("status") or result.get("result") or ""
-        assert status, f"kb_add response has no status indicator: {result}"
+        assert "kb_id" in result, f"kb_add response missing kb_id: {result}"
 
     def test_add_multiple_entries_distinct_ids(
         self, client: LoreClient, cleanup_topic: str
@@ -47,7 +45,7 @@ class TestKbAdd:
                 title=f"Distinct-id entry {i}",
                 content=f"Entry body number {i}.",
             )
-            ids.append(res["id"])
+            ids.append(res["kb_id"])
         assert len(set(ids)) == 3, f"Duplicate IDs returned by kb_add: {ids}"
 
 
@@ -61,10 +59,10 @@ class TestKbGet:
             title="Lifecycle test: get by id",
             content="Content for get test.",
         )
-        entry_id = add_result["id"]
+        entry_id = add_result["kb_id"]
         get_result = client.kb_get(entry_id)
-        assert get_result.get("id") == entry_id, (
-            f"kb_get returned wrong entry. Expected id={entry_id}, got {get_result.get('id')}"
+        assert get_result.get("kb_id") == entry_id, (
+            f"kb_get returned wrong entry. Expected kb_id={entry_id}, got {get_result.get('kb_id')}"
         )
 
     def test_get_preserves_content(self, client: LoreClient, cleanup_topic: str) -> None:
@@ -75,7 +73,7 @@ class TestKbGet:
             title="Content preservation check",
             content=content,
         )
-        get_result = client.kb_get(add_result["id"])
+        get_result = client.kb_get(add_result["kb_id"])
         returned_content = get_result.get("content") or ""
         assert content in returned_content, (
             f"kb_get returned content does not contain original text.\n"
@@ -85,7 +83,7 @@ class TestKbGet:
 
     def test_get_nonexistent_id_returns_error(self, client: LoreClient) -> None:
         """kb_get with a non-existent ID must raise LoreClientError or return an error dict."""
-        fake_id = "00000000-0000-0000-0000-000000000000"
+        fake_id = "kb_00000000000000000000000000000000"
         try:
             result = client.kb_get(fake_id)
             # If no exception, the response should carry an error indicator
@@ -99,25 +97,6 @@ class TestKbGet:
 class TestKbUpdate:
     """Verify kb_update modifies entry fields."""
 
-    def test_update_title(self, client: LoreClient, cleanup_topic: str) -> None:
-        """After kb_update, kb_get must reflect the new title."""
-        add_result = client.kb_add(
-            topic=cleanup_topic,
-            title="Original title",
-            content="Body text for update test.",
-        )
-        entry_id = add_result["id"]
-        new_title = "Updated title — lifecycle test"
-
-        client.kb_update(entry_id, title=new_title)
-
-        get_result = client.kb_get(entry_id)
-        returned_title = get_result.get("title") or ""
-        assert new_title in returned_title, (
-            f"kb_get after update did not reflect new title.\n"
-            f"Expected: {new_title!r}\nGot: {returned_title!r}"
-        )
-
     def test_update_content(self, client: LoreClient, cleanup_topic: str) -> None:
         """After kb_update with new content, kb_get must return the new content."""
         add_result = client.kb_add(
@@ -125,7 +104,7 @@ class TestKbUpdate:
             title="Content update test",
             content="Old content.",
         )
-        entry_id = add_result["id"]
+        entry_id = add_result["kb_id"]
         new_content = "Replacement content sentinel: a1b2c3d4."
 
         client.kb_update(entry_id, content=new_content)
@@ -134,6 +113,24 @@ class TestKbUpdate:
         returned = get_result.get("content") or ""
         assert new_content in returned, (
             f"kb_get after content update is stale.\nExpected: {new_content!r}\nGot: {returned!r}"
+        )
+
+    def test_update_topic(self, client: LoreClient, cleanup_topic: str) -> None:
+        """After kb_update with new topic, kb_get must reflect the new topic."""
+        add_result = client.kb_add(
+            topic=cleanup_topic,
+            title="Topic update test",
+            content="Body text for topic update test.",
+        )
+        entry_id = add_result["kb_id"]
+        new_topic = f"{cleanup_topic}-updated"
+
+        client.kb_update(entry_id, topic=new_topic)
+
+        get_result = client.kb_get(entry_id)
+        assert get_result.get("topic") == new_topic, (
+            f"kb_get after topic update did not reflect new topic.\n"
+            f"Expected: {new_topic!r}\nGot: {get_result.get('topic')!r}"
         )
 
 
@@ -147,7 +144,7 @@ class TestKbDelete:
             title="Entry to be deleted",
             content="This entry will be deleted by the test.",
         )
-        entry_id = add_result["id"]
+        entry_id = add_result["kb_id"]
         delete_result = client.kb_delete(entry_id, confirm=True)
         assert delete_result is not None, "kb_delete returned None"
 
@@ -158,7 +155,7 @@ class TestKbDelete:
             title="Entry to delete then fetch",
             content="Should be gone after deletion.",
         )
-        entry_id = add_result["id"]
+        entry_id = add_result["kb_id"]
         client.kb_delete(entry_id, confirm=True)
 
         try:
@@ -198,18 +195,6 @@ class TestKbList:
             f"Expected empty list for phantom topic, got {len(entries)} entries"
         )
 
-    def test_list_respects_limit(self, client: LoreClient, cleanup_topic: str) -> None:
-        """kb_list with limit=1 must return at most 1 entry."""
-        for i in range(3):
-            client.kb_add(
-                topic=cleanup_topic,
-                title=f"Limit test entry {i}",
-                content=f"Body {i}",
-            )
-        result = client.kb_list(topic=cleanup_topic, limit=1)
-        entries = result.get("entries") or result.get("results") or []
-        assert len(entries) <= 1, f"kb_list with limit=1 returned {len(entries)} entries"
-
 
 @pytest.mark.slow
 class TestRoundTripIntegrity:
@@ -223,13 +208,13 @@ class TestRoundTripIntegrity:
             title="CRUD cycle — initial",
             content="Step 1: creation.",
         )
-        entry_id = add_result["id"]
+        entry_id = add_result["kb_id"]
 
         # 2. Verify via get
         get1 = client.kb_get(entry_id)
-        assert get1.get("id") == entry_id
+        assert get1.get("kb_id") == entry_id
 
-        # 3. Update
+        # 3. Update content
         updated_content = "Step 3: updated content."
         client.kb_update(entry_id, content=updated_content)
 

@@ -81,7 +81,7 @@ class TestFtsMode:
         client, sentinel = seeded_client
         result = client.kb_search(sentinel, search_mode="fts")
         for entry in _get_results(result):
-            assert "id" in entry, f"FTS result entry missing 'id': {entry}"
+            assert "kb_id" in entry, f"FTS result entry missing 'id': {entry}"
 
     def test_fts_result_entries_have_title(self, seeded_client: tuple[LoreClient, str]) -> None:
         """Each FTS result entry must carry a 'title' field."""
@@ -122,7 +122,7 @@ class TestSemanticMode:
         client, _ = seeded_client
         result = client.kb_search("sentinel verification token", search_mode="semantic")
         for entry in _get_results(result):
-            assert "id" in entry, f"Semantic result entry missing 'id': {entry}"
+            assert "kb_id" in entry, f"Semantic result entry missing 'id': {entry}"
 
     def test_semantic_mode_field_in_response(self, seeded_client: tuple[LoreClient, str]) -> None:
         """Semantic response should echo the search_mode that was used."""
@@ -165,7 +165,7 @@ class TestHybridMode:
         client, sentinel = seeded_client
         result = client.kb_search(sentinel, search_mode="hybrid")
         for entry in _get_results(result):
-            assert "id" in entry, f"Hybrid result entry missing 'id': {entry}"
+            assert "kb_id" in entry, f"Hybrid result entry missing 'id': {entry}"
 
     def test_hybrid_mode_field_in_response(self, seeded_client: tuple[LoreClient, str]) -> None:
         """Hybrid response must set search_mode to 'hybrid'."""
@@ -223,14 +223,14 @@ class TestCrossModeConsistency:
         fts_result = client.kb_search(sentinel, search_mode="fts")
         hybrid_result = client.kb_search(sentinel, search_mode="hybrid")
 
-        fts_ids = {e["id"] for e in _get_results(fts_result) if "id" in e}
-        hybrid_ids = {e["id"] for e in _get_results(hybrid_result) if "id" in e}
+        fts_ids = {e["kb_id"] for e in _get_results(fts_result) if "kb_id" in e}
+        hybrid_ids = {e["kb_id"] for e in _get_results(hybrid_result) if "kb_id" in e}
 
         assert fts_ids, f"FTS returned no results for sentinel {sentinel!r}"
         assert hybrid_ids, f"Hybrid returned no results for sentinel {sentinel!r}"
 
         # The top FTS hit should also be reachable via hybrid
-        top_fts_id = _get_results(fts_result)[0]["id"]
+        top_fts_id = _get_results(fts_result)[0]["kb_id"]
         assert top_fts_id in hybrid_ids, (
             f"Top FTS result {top_fts_id!r} not found in hybrid results.\n"
             f"Hybrid IDs: {sorted(hybrid_ids)}"

@@ -53,7 +53,7 @@ def _find_rank(
 ) -> int | None:
     """Return 1-based rank of ``seeded_id`` in ``results``, or ``None``."""
     for rank, entry in enumerate(results, start=1):
-        if entry.get("id") == seeded_id:
+        if entry.get("kb_id") == seeded_id:
             return rank
     return None
 
@@ -83,10 +83,8 @@ class TestRegressionCorpus:
         return params
 
     @pytest.fixture(autouse=True)
-    def _seed_and_cleanup(self, client: LoreClient, request: pytest.FixtureRequest) -> Any:
+    def _seed_and_cleanup(self, client: LoreClient, entry: dict[str, Any]) -> Any:
         """Seed the corpus entry and track the new ID for assertions."""
-        # request.param is set by parametrize; stash on the instance
-        entry: dict[str, Any] = request.param[0] if isinstance(request.param, tuple) else {}
         unique_suffix = uuid.uuid4().hex[:8]
         topic = f"e2e-regression-{entry.get('topic', 'misc')}-{unique_suffix}"
 
@@ -95,7 +93,7 @@ class TestRegressionCorpus:
             title=entry.get("title", "regression entry"),
             content=entry.get("content", ""),
         )
-        seeded_id: str = add_result["id"]
+        seeded_id: str = add_result["kb_id"]
 
         # Brief pause to allow embeddings to be computed (may be async on server)
         time.sleep(0.5)
@@ -124,7 +122,7 @@ class TestRegressionCorpus:
         expect_match: bool = query.get("expect_match", True)
         max_rank: int | None = query.get("max_rank")
 
-        result = client.kb_search(q_text, search_mode=mode, limit=max(20, _TOP_N_FALSE_NEG))
+        result = client.kb_search(q_text, search_mode=mode, top_k=max(20, _TOP_N_FALSE_NEG))
         results = _get_results(result)
         rank = _find_rank(results, self._seeded_id)
 
@@ -132,17 +130,17 @@ class TestRegressionCorpus:
             assert rank is not None, (
                 f"[{entry['id']}] Expected seeded entry {self._seeded_id!r} in {mode!r} "
                 f"results for query {q_text!r}, but it was not found.\n"
-                f"Top result IDs: {[e.get('id') for e in results[:5]]}"
+                f"Top result IDs: {[e.get('kb_id') for e in results[:5]]}"
             )
             if max_rank is not None:
                 assert rank <= max_rank, (
                     f"[{entry['id']}] Expected seeded entry within top {max_rank} for "
                     f"{mode!r} query {q_text!r}, but it appeared at rank {rank}.\n"
-                    f"Top result IDs: {[e.get('id') for e in results[: max_rank + 2]]}"
+                    f"Top result IDs: {[e.get('kb_id') for e in results[: max_rank + 2]]}"
                 )
         else:
             # False-negative check: entry must NOT appear in top N
-            top_ids = {e.get("id") for e in results[:_TOP_N_FALSE_NEG]}
+            top_ids = {e.get("kb_id") for e in results[:_TOP_N_FALSE_NEG]}
             assert self._seeded_id not in top_ids, (
                 f"[{entry['id']}] Seeded entry {self._seeded_id!r} appeared in "
                 f"top-{_TOP_N_FALSE_NEG} results for unrelated {mode!r} query "
