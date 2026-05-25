@@ -756,3 +756,368 @@ def test_get_telemetry_stats_success(monkeypatch):
     resp = srv.handle_get_telemetry_stats(topic="t")
     assert resp["ok"] is True
     assert resp["data"]["stats"] == fake_stats
+
+
+# ===========================================================================
+# Phase 3 (Issue #5): hard negative pairs — deterministic pair_id, schema DDL,
+# migration parity, backend guards, limit clamping, and the two handlers.
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Deterministic pair_id (Correction 1: SHA-256, not secrets.token_hex)
+# ---------------------------------------------------------------------------
+
+
+def test_hard_negative_pair_id_is_deterministic():
+    """Same (query_text, doc_id) must always yield the same 32-hex pair_id."""
+    a = telemetry.hard_negative_pair_id("how do I X?", "kb-42")
+    b = telemetry.hard_negative_pair_id("how do I X?", "kb-42")
+    assert a == b
+    assert re.match(r"^[0-9a-f]{32}$", a), a
+
+
+def test_hard_negative_pair_id_differs_by_input():
+    """Different inputs must yield different pair_ids (no collisions on basics)."""
+    base = telemetry.hard_negative_pair_id("q", "d")
+    assert base != telemetry.hard_negative_pair_id("q", "d2")
+    assert base != telemetry.hard_negative_pair_id("q2", "d")
+
+
+def test_hard_negative_pair_id_matches_sha256_contract():
+    """pair_id must be SHA-256 of 'query:doc' truncated to 32 hex chars."""
+    import hashlib
+
+    expected = hashlib.sha256(b"q:d").hexdigest()[:32]
+    assert telemetry.hard_negative_pair_id("q", "d") == expected
+
+
+# ---------------------------------------------------------------------------
+# HARD_NEGATIVE_PG_SCHEMA shape + migration 007 parity
+# ---------------------------------------------------------------------------
+
+
+def test_hn_schema_contains_table_and_four_indexes():
+    schema = telemetry.HARD_NEGATIVE_PG_SCHEMA
+    assert "CREATE TABLE IF NOT EXISTS knowledge.hard_negative_pairs" in schema
+    assert "ON DELETE RESTRICT" in schema  # Correction 3
+    index_creates = re.findall(r"CREATE (?:UNIQUE )?INDEX IF NOT EXISTS", schema)
+    assert len(index_creates) == 4
+    # 1 table + 4 indexes = 5 CREATE statements total.
+    statements = [s.strip() for s in schema.split(";") if s.strip()]
+    assert len(statements) == 5
+
+
+def test_hn_schema_matches_migration_file():
+    """The DDL embedded in code must be byte-for-byte identical to migration 007."""
+    migration = (
+        Path(__file__).resolve().parents[1] / "migrations" / "007_hard_negative_pairs.sql"
+    )
+    text = migration.read_text()
+    sql_start = text.index("CREATE TABLE IF NOT EXISTS")
+    migration_ddl = text[sql_start:].strip()
+    code_ddl = telemetry.HARD_NEGATIVE_PG_SCHEMA.strip()
+    assert migration_ddl == code_ddl
+
+
+def test_ensure_hard_negative_schema_executes_each_statement_individually():
+    """psycopg2 only runs the first statement of a multi-statement string, so
+    ensure_hard_negative_schema must execute each of the 5 statements (1 table +
+    4 indexes) individually, with no embedded semicolons."""
+
+    class _FakeCursor:
+        def __init__(self):
+            self.executed: list[str] = []
+
+        def execute(self, sql):
+            self.executed.append(sql)
+
+        def close(self):
+            pass
+
+    class _FakeConn:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        def cursor(self):
+            return self._cursor
+
+    expected = [s.strip() for s in telemetry.HARD_NEGATIVE_PG_SCHEMA.split(";") if s.strip()]
+    assert len(expected) == 5
+    cursor = _FakeCursor()
+    telemetry.ensure_hard_negative_schema(_FakeConn(cursor))
+
+    assert cursor.executed == expected
+    assert all(";" not in stmt for stmt in cursor.executed)
+
+
+def test_ensure_hard_negative_schema_swallows_errors(caplog):
+    """A cursor.execute() failure must be logged at WARNING, never raised."""
+    import logging
+
+    class _BoomCursor:
+        def execute(self, *_a, **_k):
+            raise RuntimeError("boom")
+
+        def close(self):
+            pass
+
+    class _BoomConn:
+        def cursor(self):
+            return _BoomCursor()
+
+    with caplog.at_level(logging.WARNING, logger="lore.telemetry"):
+        telemetry.ensure_hard_negative_schema(_BoomConn())
+    assert any("ensure_hard_negative_schema failed" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Backend guards: non-PostgreSQL db => None from refresh/fetch
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_hard_negative_pairs_none_for_non_pg():
+    assert (
+        telemetry.refresh_hard_negative_pairs(since=None, dry_run=False, db=_FakeSqliteDb())
+        is None
+    )
+
+
+def test_fetch_hard_negatives_none_for_non_pg():
+    assert (
+        telemetry.fetch_hard_negatives(
+            signal_type=None, limit=100, doc_id=None, query_text_like=None, db=_FakeSqliteDb()
+        )
+        is None
+    )
+
+
+def test_refresh_dry_run_rolls_back_not_commits(monkeypatch, pg_db):
+    """dry_run=True must ROLLBACK the transaction, never COMMIT."""
+    rolled_back = []
+    committed = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, *a, **kw):
+            pass
+
+        def executemany(self, *a, **kw):
+            pass
+
+        def fetchone(self):
+            return (0,)  # for the COUNT(*) queries
+
+        def fetchall(self):
+            return []
+
+    class FakeConn:
+        autocommit = True  # set to False by the function
+
+        def set_client_encoding(self, *a, **kw):
+            pass
+
+        def cursor(self, **kw):
+            return FakeCursor()
+
+        def rollback(self):
+            rolled_back.append(1)
+
+        def commit(self):
+            committed.append(1)
+
+        def close(self):
+            pass
+
+    _patch_connect(monkeypatch, FakeConn())
+
+    result = telemetry.refresh_hard_negative_pairs(since=None, dry_run=True, db=pg_db)
+    assert result["dry_run"] is True
+    assert len(rolled_back) == 1, "rollback() must be called exactly once"
+    assert len(committed) == 0, "commit() must never be called on dry_run"
+
+
+# ---------------------------------------------------------------------------
+# fetch_hard_negatives: filter clauses + parameterized ILIKE
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_hard_negatives_no_filters(monkeypatch, pg_db):
+    cur = _FakeRWCursor(fetchall=[])
+    _patch_connect(monkeypatch, _FakeConn(cur))
+    telemetry.fetch_hard_negatives(
+        signal_type=None, limit=50, doc_id=None, query_text_like=None, db=pg_db
+    )
+    sql, params = cur.executed[0]
+    assert "WHERE" not in sql
+    assert "ORDER BY occurrence_count DESC, last_seen_at DESC LIMIT %s" in sql
+    assert params == (50,)
+
+
+def test_fetch_hard_negatives_all_filters_parameterized(monkeypatch, pg_db):
+    cur = _FakeRWCursor(fetchall=[])
+    _patch_connect(monkeypatch, _FakeConn(cur))
+    telemetry.fetch_hard_negatives(
+        signal_type="explicit", limit=10, doc_id="kb-7", query_text_like="needle", db=pg_db
+    )
+    sql, params = cur.executed[0]
+    assert "signal_type = %s" in sql
+    assert "doc_id = %s" in sql
+    assert "query_text ILIKE %s" in sql
+    # ILIKE value is wrapped in %...% as a bind param (no f-string interpolation).
+    assert params == ("explicit", "kb-7", "%needle%", 10)
+
+
+# ---------------------------------------------------------------------------
+# Handler: handle_refresh_hard_negatives
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_hard_negatives_mining_off_skipped(monkeypatch):
+    import lore.server as srv
+
+    monkeypatch.setenv("LORE_HARD_NEGATIVE_MINING", "false")
+    monkeypatch.setenv("DB_BACKEND", "local")
+    resp = srv.handle_refresh_hard_negatives()
+    assert resp["ok"] is True
+    assert resp["data"]["skipped"] is True
+    assert resp["data"]["reason"] == "mining_disabled"
+
+
+def test_refresh_hard_negatives_backend_unavailable_returns_error(monkeypatch):
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    monkeypatch.setattr(srv.telemetry, "refresh_hard_negative_pairs", lambda **_k: None)
+    resp = srv.handle_refresh_hard_negatives()
+    assert resp["ok"] is False
+    assert resp["error"] == "unexpected_exception"
+
+
+def test_refresh_hard_negatives_success(monkeypatch):
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    fake = {
+        "inserted": 2, "updated": 1, "total_pairs": 3,
+        "processed_telemetry_rows": 4, "since": "all", "dry_run": False,
+    }
+    monkeypatch.setattr(srv.telemetry, "refresh_hard_negative_pairs", lambda **_k: fake)
+    resp = srv.handle_refresh_hard_negatives()
+    assert resp["ok"] is True
+    assert resp["data"] == fake
+    assert "Processed 4 telemetry rows" in resp["message"]
+
+
+def test_refresh_hard_negatives_dry_run_message(monkeypatch):
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    fake = {
+        "inserted": 0, "updated": 0, "total_pairs": 0,
+        "processed_telemetry_rows": 0, "since": "all", "dry_run": True,
+    }
+    monkeypatch.setattr(srv.telemetry, "refresh_hard_negative_pairs", lambda **_k: fake)
+    resp = srv.handle_refresh_hard_negatives(dry_run=True)
+    assert resp["ok"] is True
+    assert resp["message"].startswith("[dry-run] ")
+
+
+# ---------------------------------------------------------------------------
+# Handler: handle_get_hard_negatives
+# ---------------------------------------------------------------------------
+
+
+def test_get_hard_negatives_invalid_signal_type(monkeypatch):
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    resp = srv.handle_get_hard_negatives(signal_type="bogus")
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+
+
+def test_get_hard_negatives_does_not_gate_on_mining(monkeypatch):
+    """get_hard_negatives reads historical pairs even when mining is OFF."""
+    import lore.server as srv
+
+    monkeypatch.setenv("LORE_HARD_NEGATIVE_MINING", "false")
+    monkeypatch.setenv("DB_BACKEND", "local")
+
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return [{"pair_id": "abc", "doc_id": "kb-1"}]
+
+    monkeypatch.setattr(srv.telemetry, "fetch_hard_negatives", _spy)
+    resp = srv.handle_get_hard_negatives(signal_type="explicit")
+    # Mining is OFF but the read still succeeds (no skipped flag).
+    assert resp["ok"] is True
+    assert resp["data"]["count"] == 1
+    assert "skipped" not in resp["data"]
+    assert captured["signal_type"] == "explicit"
+
+
+def test_get_hard_negatives_all_maps_to_none_filter(monkeypatch):
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(srv.telemetry, "fetch_hard_negatives", _spy)
+    resp = srv.handle_get_hard_negatives(signal_type="all")
+    assert resp["ok"] is True
+    assert captured["signal_type"] is None  # "all" => no filter
+
+
+@pytest.mark.parametrize(
+    "given,expected",
+    [
+        (-3, 1),       # truthy but below 1 -> floored to 1
+        (1, 1),        # exact lower bound passes through
+        (1001, 1000),  # above MAX_HN_LIMIT -> clamped
+        (9999, 1000),  # well above ceiling -> clamped
+        (None, 100),   # falsy -> DEFAULT_HN_LIMIT
+        (0, 100),      # 0 is falsy -> DEFAULT_HN_LIMIT (handler uses `if limit`)
+        (50, 50),
+    ],
+)
+def test_get_hard_negatives_limit_clamping(monkeypatch, given, expected):
+    """Limit is clamped to [1, MAX_HN_LIMIT]; falsy (None/0) falls back to default.
+
+    Note: the handler's `int(limit) if limit else DEFAULT_HN_LIMIT` treats 0 as
+    falsy, so limit=0 yields the default (100), not the floor (1). A negative
+    limit is truthy and is floored to 1 by the surrounding max(1, ...).
+    """
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(srv.telemetry, "fetch_hard_negatives", _spy)
+    srv.handle_get_hard_negatives(limit=given)
+    assert captured["limit"] == expected
+
+
+def test_get_hard_negatives_backend_unavailable_returns_error(monkeypatch):
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    monkeypatch.setattr(srv.telemetry, "fetch_hard_negatives", lambda **_k: None)
+    resp = srv.handle_get_hard_negatives()
+    assert resp["ok"] is False
+    assert resp["error"] == "unexpected_exception"

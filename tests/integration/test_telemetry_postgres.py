@@ -443,3 +443,157 @@ def test_notes_truncation_persists(server_module, cleanup_session):
 
     row = s.handle_get_retrieval_telemetry(query_id=qid)["data"]["rows"][0]
     assert len(row["notes"]) == MAX_NOTES_LEN
+
+
+# ===========================================================================
+# Phase 3 (Issue #5): hard negative pairs table, refresh round-trip, dry-run,
+# filtering, deterministic pair_id.
+# ===========================================================================
+
+
+@pytest.fixture
+def hn_fixture(server_module, session_id):
+    """Provision a real KB entry + a low-scored telemetry row referencing it.
+
+    Yields ``(kb_id, query_text, query_id)``. Teardown deletes — in dependency
+    order (pairs first, since FK is ON DELETE RESTRICT) — every pair for the
+    kb_id, the telemetry row, and finally the KB entry.
+    """
+    s = server_module
+    import psycopg2
+
+    from lore.telemetry import _pg_conn_params
+
+    query_text = f"hn probe {session_id}"
+    add = s.handle_kb_add(topic="_hn_topic", title="hn entry", content="hn content")
+    kb_id = add["data"]["kb_id"]
+
+    # Insert a low-scored telemetry row (explicit signal) referencing kb_id.
+    query_id = f"qry_hn{uuid.uuid4().hex[:9]}"
+    conn_params = _pg_conn_params(s.db)
+    conn = psycopg2.connect(**conn_params)
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO knowledge.retrieval_telemetry
+                    (query_id, query_text, retrieved_document_ids, result_count,
+                     session_id, user_feedback_score)
+                VALUES (%s, %s, %s::jsonb, %s, %s, %s)
+                """,
+                (query_id, query_text, f'["{kb_id}"]', 1, session_id, 1),
+            )
+    finally:
+        conn.close()
+
+    yield kb_id, query_text, query_id
+
+    conn = psycopg2.connect(**conn_params)
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM knowledge.hard_negative_pairs WHERE doc_id = %s", (kb_id,)
+            )
+            cur.execute(
+                "DELETE FROM knowledge.retrieval_telemetry WHERE query_id = %s", (query_id,)
+            )
+            cur.execute("DELETE FROM knowledge.kb_entries WHERE kb_id = %s", (kb_id,))
+    finally:
+        conn.close()
+
+
+def _count_pairs(s, kb_id):
+    import psycopg2
+
+    from lore.telemetry import _pg_conn_params
+
+    conn = psycopg2.connect(**_pg_conn_params(s.db))
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pair_id, occurrence_count, signal_type "
+                "FROM knowledge.hard_negative_pairs WHERE doc_id = %s",
+                (kb_id,),
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def test_hard_negative_pairs_table_exists(server_module):
+    s = server_module
+    conn = s.db._get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='knowledge' AND table_name='hard_negative_pairs')"
+        )
+        assert cursor.fetchone()[0] is True
+    finally:
+        cursor.close()
+
+
+def test_refresh_round_trip(server_module, hn_fixture):
+    """A low-scored telemetry row must produce an explicit hard negative pair."""
+    s = server_module
+    kb_id, query_text, _qid = hn_fixture
+
+    resp = s.handle_refresh_hard_negatives()
+    assert resp["ok"] is True, resp
+    assert resp["data"]["processed_telemetry_rows"] >= 1
+
+    pairs = _count_pairs(s, kb_id)
+    assert len(pairs) == 1
+    _pair_id, occurrence_count, signal_type = pairs[0]
+    assert signal_type == "explicit"
+    assert occurrence_count == 1
+
+
+def test_dry_run_writes_nothing(server_module, hn_fixture):
+    s = server_module
+    kb_id, _query_text, _qid = hn_fixture
+
+    resp = s.handle_refresh_hard_negatives(dry_run=True)
+    assert resp["ok"] is True
+    assert resp["data"]["dry_run"] is True
+    # Dry-run reports counts but persists nothing.
+    assert _count_pairs(s, kb_id) == []
+
+
+def test_get_hard_negatives_filters_by_signal_type(server_module, hn_fixture):
+    s = server_module
+    kb_id, _query_text, _qid = hn_fixture
+    assert s.handle_refresh_hard_negatives()["ok"] is True
+
+    explicit = s.handle_get_hard_negatives(signal_type="explicit", doc_id=kb_id)
+    assert explicit["ok"] is True
+    assert explicit["data"]["count"] == 1
+    assert explicit["data"]["pairs"][0]["signal_type"] == "explicit"
+
+    # No behavioral pairs were mined for this doc.
+    behavioral = s.handle_get_hard_negatives(signal_type="behavioral", doc_id=kb_id)
+    assert behavioral["ok"] is True
+    assert behavioral["data"]["count"] == 0
+
+
+def test_deterministic_pair_id_double_refresh(server_module, hn_fixture):
+    """Refreshing twice keeps the same pair_id and bumps occurrence_count to 2."""
+    s = server_module
+    kb_id, _query_text, _qid = hn_fixture
+
+    assert s.handle_refresh_hard_negatives()["ok"] is True
+    first = _count_pairs(s, kb_id)
+    assert len(first) == 1
+    first_pair_id, first_count, _sig = first[0]
+    assert first_count == 1
+
+    assert s.handle_refresh_hard_negatives()["ok"] is True
+    second = _count_pairs(s, kb_id)
+    assert len(second) == 1, "deterministic pair_id must not create a duplicate row"
+    second_pair_id, second_count, _sig2 = second[0]
+    assert second_pair_id == first_pair_id
+    assert second_count == 2
