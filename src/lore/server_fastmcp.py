@@ -567,9 +567,19 @@ PROTOCOL_VERSION = "2025-11-25"
 
 
 async def _tools_list_payload() -> list[dict]:
-    """Return the tools array as plain dicts (name, description, inputSchema)."""
+    """Return the tools array as plain dicts (name, description, inputSchema).
+
+    outputSchema is stripped from the serialized tool dicts. The custom /mcp
+    endpoint returns TextContent only (no structuredContent), so advertising
+    an outputSchema causes mcp-client 1.26+ to raise a validation error.
+    """
     tools = await mcp._list_tools()
-    return [t.to_mcp_tool().model_dump(exclude_none=True) for t in tools]
+    result = []
+    for t in tools:
+        tool_dict = t.to_mcp_tool().model_dump(exclude_none=True)
+        tool_dict.pop("outputSchema", None)
+        result.append(tool_dict)
+    return result
 
 
 async def _jsonrpc_dispatch(request: Request) -> JSONResponse:
