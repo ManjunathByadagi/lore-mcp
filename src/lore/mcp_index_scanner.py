@@ -2,14 +2,18 @@
 MCP Index Scanner - Scans MCP servers and indexes their tools
 
 This module provides functionality to:
-- Scan /srv/latvian_mcp/servers/ for MCP server directories
+- Scan a configurable servers directory for MCP server directories
 - Parse server.py files to extract tool definitions
 - Index servers and tools in Supabase
 - Track changes and versions
+
+The servers directory is configured via the LORE_MCP_SERVERS_PATH environment
+variable. When not set, scan/rebuild operations return a not-configured error.
 """
 
 import ast
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -18,14 +22,29 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_NOT_CONFIGURED = {
+    "ok": False,
+    "error": "not_configured",
+    "message": (
+        "Set LORE_MCP_SERVERS_PATH to use MCP index tools. "
+        "Example: export LORE_MCP_SERVERS_PATH=/path/to/mcp/servers"
+    ),
+}
+
 
 class MCPIndexScanner:
     """Scanner for MCP servers and their tools."""
 
     def __init__(self, db_client):
-        """Initialize scanner with database client."""
+        """Initialize scanner with database client.
+
+        The servers directory is read from the LORE_MCP_SERVERS_PATH
+        environment variable.  When the variable is absent, ``servers_path``
+        is ``None`` and scan/rebuild operations return a not-configured error.
+        """
         self.db = db_client
-        self.servers_path = Path("/srv/latvian_mcp/servers")
+        raw = os.environ.get("LORE_MCP_SERVERS_PATH")
+        self.servers_path: Path | None = Path(raw) if raw else None
 
     def scan_all_servers(
         self, triggered_by: str = "manual", config_filter: bool = True, config_path: str = None
@@ -41,6 +60,10 @@ class MCPIndexScanner:
         Returns:
             Dict with scan results
         """
+        if self.servers_path is None:
+            logger.warning("mcp_index_scan called but LORE_MCP_SERVERS_PATH is not set")
+            return _NOT_CONFIGURED
+
         start_time = time.time()
         logger.info("Starting MCP index scan...")
 

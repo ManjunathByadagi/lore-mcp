@@ -65,3 +65,4 @@ class ErrorCodes:
     NONZERO_EXIT = "nonzero_exit"
     TIMEOUT = "timeout"
     FORBIDDEN = "forbidden"
+    NOT_CONFIGURED = "not_configured"

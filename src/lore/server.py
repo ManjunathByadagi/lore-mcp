@@ -2957,6 +2957,9 @@ def handle_mcp_index_scan(triggered_by: str = "manual", config_filter: bool = Tr
         scanner = MCPIndexScanner(db)
         result = scanner.scan_all_servers(triggered_by=triggered_by, config_filter=config_filter)
 
+        if result.get("error") == "not_configured":
+            return ResponseEnvelope.error(ErrorCodes.NOT_CONFIGURED, result["message"])
+
         return ResponseEnvelope.success(
             f"Scanned {result['servers_scanned']} servers, indexed {result['tools_indexed']} tools",
             result,
@@ -3100,6 +3103,9 @@ def handle_mcp_index_rebuild() -> dict:
     try:
         scanner = MCPIndexScanner(db)
         result = scanner.scan_all_servers(triggered_by="rebuild")
+
+        if result.get("error") == "not_configured":
+            return ResponseEnvelope.error(ErrorCodes.NOT_CONFIGURED, result["message"])
 
         return ResponseEnvelope.success(
             f"Rebuilt index: {result['servers_scanned']} servers, {result['tools_indexed']} tools",
