@@ -82,16 +82,27 @@ def cleanup_session(server_module, session_id):
     """Yield a session id, then delete telemetry rows under it."""
     s = server_module
     yield session_id
+    # Open a fresh, short-lived autocommit connection for teardown (mirrors the
+    # production read helpers' _pg_conn_params pattern) so the DELETE is always
+    # committed and never leaks rows in an open transaction.
     try:
-        conn = s.db._get_connection()
-        cursor = conn.cursor()
+        import psycopg2
+
+        from lore.telemetry import _pg_conn_params
+
+        conn_params = _pg_conn_params(s.db)
+        if conn_params is None:
+            return
+        conn = psycopg2.connect(**conn_params)
+        conn.autocommit = True
         try:
-            cursor.execute(
-                "DELETE FROM knowledge.retrieval_telemetry WHERE session_id = %s",
-                (session_id,),
-            )
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM knowledge.retrieval_telemetry WHERE session_id = %s",
+                    (session_id,),
+                )
         finally:
-            cursor.close()
+            conn.close()
     except Exception:
         pass
 

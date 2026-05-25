@@ -1651,6 +1651,10 @@ def handle_log_retrieval_feedback(
             notes=notes,
             db=db,
         )
+        if rows_affected is None:
+            return ResponseEnvelope.error(
+                ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable"
+            )
         if rows_affected == 0:
             return ResponseEnvelope.error(
                 ErrorCodes.NOT_FOUND, f"No telemetry row for query_id: {query_id}"
