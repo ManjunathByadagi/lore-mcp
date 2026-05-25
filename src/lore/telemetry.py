@@ -83,6 +83,17 @@ TELEMETRY_NOTES_DDL = (
     "ALTER TABLE knowledge.retrieval_telemetry ADD COLUMN IF NOT EXISTS notes TEXT;"
 )
 
+# Phase 4a (Issue #5): the ``query_embedding`` column stores each query's
+# embedding alongside its telemetry row so Phase 4b re-ranking can find
+# historically-poor docs for queries similar to the current one (ANN cosine).
+# Single idempotent statement; mirrors migrations/008_query_embedding.sql (the
+# HNSW index is deliberately NOT auto-applied — it is created on demand by the
+# backfill_query_embeddings tool to avoid blocking startup on large tables).
+TELEMETRY_QUERY_EMBEDDING_DDL = """\
+ALTER TABLE knowledge.retrieval_telemetry
+    ADD COLUMN IF NOT EXISTS query_embedding halfvec(384);\
+"""
+
 # Phase 2 bounds (Issue #5):
 #   - MAX_NOTES_LEN     caps stored feedback notes (defensive truncation).
 #   - MAX_READ_LIMIT    hard ceiling on rows a read tool may return.
@@ -139,6 +150,13 @@ def ensure_telemetry_schema(conn) -> None:
         # (migration 006) is applied as one more statement after the base schema.
         statements = [s.strip() for s in TELEMETRY_PG_SCHEMA.split(";") if s.strip()]
         statements.append(TELEMETRY_NOTES_DDL.rstrip(";").strip())
+        # Phase 4a (Issue #5): the query_embedding column (migration 008) is
+        # applied as one more statement after the notes column, following the
+        # same split-and-loop pattern so a fresh database picks it up at startup.
+        for stmt in TELEMETRY_QUERY_EMBEDDING_DDL.split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                statements.append(stmt)
         for stmt in statements:
             cursor.execute(stmt)
     finally:
@@ -201,6 +219,7 @@ def write_retrieval_telemetry_async(
     caller_agent: str | None,
     model_version: str | None,
     db: Any,
+    query_embedding: list | None = None,
 ) -> threading.Thread | None:
     """Spawn a daemon thread that writes one telemetry row, then return.
 
@@ -240,6 +259,7 @@ def write_retrieval_telemetry_async(
             required_requery=required_requery,
             caller_agent=caller_agent,
             model_version=model_version,
+            query_embedding=query_embedding,
         ),
         daemon=True,
     )
@@ -261,6 +281,7 @@ def _write_row(
     required_requery: bool,
     caller_agent: str | None,
     model_version: str | None,
+    query_embedding: list | None = None,
 ) -> None:
     """Insert a single telemetry row on a fresh, dedicated connection.
 
@@ -285,9 +306,10 @@ def _write_row(
                 INSERT INTO knowledge.retrieval_telemetry (
                     query_id, query_text, topic, search_mode,
                     retrieved_document_ids, result_count, session_id,
-                    parent_query_id, required_requery, caller_agent, model_version
+                    parent_query_id, required_requery, caller_agent, model_version,
+                    query_embedding
                 ) VALUES (
-                    %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s::halfvec
                 )
                 ON CONFLICT (query_id) DO NOTHING
                 """,
@@ -303,6 +325,10 @@ def _write_row(
                     required_requery,
                     caller_agent,
                     model_version,
+                    # Phase 4a (Issue #5): query_embedding stored as halfvec(384).
+                    # psycopg2 adapts a Python list[float] to a pgvector literal
+                    # under the explicit ::halfvec cast; None becomes NULL.
+                    query_embedding,
                 ),
             )
         finally:
@@ -721,3 +747,168 @@ def fetch_hard_negatives(
                 return []
     finally:
         conn.close()
+
+
+# ===========================================================================
+# Phase 4 (Issue #5): query-embedding storage + re-ranking.
+#
+# Phase 4b re-ranking is INDEPENDENT of mining: it reads from
+# hard_negative_pairs (a pre-aggregated quality signal that may have been
+# populated by another process or by hand) joined with the Phase 4a
+# query_embedding column for ANN similarity. The gate is its own env flag
+# (LORE_RERANKING_ENABLED) so it can be toggled without enabling mining.
+# Both helpers below open a fresh connection and are strictly best-effort:
+# re-ranking must NEVER break the search request path.
+# ===========================================================================
+
+
+def reranking_enabled() -> bool:
+    """Returns True if re-ranking is enabled.
+
+    Re-ranking is independent of telemetry mining; it reads from
+    hard_negative_pairs which may have been populated by another process or
+    manually.
+
+    Requires: LORE_RERANKING_ENABLED=true (or 1 or yes)
+    Also requires: PostgreSQL backend (re-ranking is Postgres-only).
+    """
+    return os.environ.get("LORE_RERANKING_ENABLED", "").lower() in ("1", "true", "yes")
+
+
+def fetch_reranking_bad_docs(query_embedding: list, db, cosine_threshold: float = 0.15) -> list[str]:
+    """Returns doc_ids that were historically poor matches for queries similar to the current one.
+
+    Uses hard_negative_pairs as the source (pre-aggregated quality signal)
+    joined with retrieval_telemetry.query_embedding for ANN similarity.
+
+    Returns [] on any error (re-ranking is best-effort; must not break search).
+    """
+    try:
+        import psycopg2
+
+        conn_params = _pg_conn_params(db)
+        if conn_params is None:
+            return []
+        conn = psycopg2.connect(**conn_params)
+        try:
+            cursor = conn.cursor()
+            # Find query_ids from telemetry where the stored query embedding is
+            # within cosine_threshold of the current query embedding.
+            # Then find doc_ids from hard_negative_pairs that appeared in those query_ids.
+            cursor.execute(
+                """
+                SELECT DISTINCT hnp.doc_id
+                FROM knowledge.hard_negative_pairs hnp
+                JOIN knowledge.retrieval_telemetry rt
+                    ON rt.query_id = ANY(
+                        SELECT jsonb_array_elements_text(hnp.source_query_ids)
+                    )
+                WHERE rt.query_embedding IS NOT NULL
+                  AND (rt.query_embedding <=> %s::halfvec) < %s
+                LIMIT 500
+                """,
+                (query_embedding, cosine_threshold),
+            )
+            rows = cursor.fetchall()
+            return [row[0] for row in rows]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
+def backfill_query_embeddings(
+    db,
+    encode_fn,
+    batch_size: int = 32,
+    limit: int = 1000,
+    dry_run: bool = False,
+    build_index: bool = False,
+) -> dict:
+    """Backfill query_embedding for rows in retrieval_telemetry where it is NULL.
+
+    Args:
+        db: DB client (for connection params)
+        encode_fn: callable(text) -> list[float] (pass encode_text)
+        batch_size: rows per batch (default 32)
+        limit: max rows to process in this call (default 1000)
+        dry_run: if True, compute embeddings but do not write
+        build_index: if True, run CREATE INDEX CONCURRENTLY after backfill
+
+    Returns dict with: processed, updated, skipped, index_built
+    """
+    import psycopg2
+
+    conn_params = _pg_conn_params(db)
+    conn = psycopg2.connect(**conn_params)
+    processed = 0
+    updated = 0
+    skipped = 0
+    try:
+        cursor = conn.cursor()
+        # Fetch in batches using LIMIT/OFFSET
+        offset = 0
+        remaining = limit
+        while remaining > 0:
+            batch = min(batch_size, remaining)
+            cursor.execute(
+                """
+                SELECT query_id, query_text
+                FROM knowledge.retrieval_telemetry
+                WHERE query_embedding IS NULL
+                ORDER BY created_at ASC
+                LIMIT %s OFFSET %s
+                """,
+                (batch, offset),
+            )
+            rows = cursor.fetchall()
+            if not rows:
+                break
+            for query_id, query_text in rows:
+                processed += 1
+                try:
+                    embedding = encode_fn(query_text)
+                    if not dry_run:
+                        cursor.execute(
+                            "UPDATE knowledge.retrieval_telemetry "
+                            "SET query_embedding = %s::halfvec WHERE query_id = %s",
+                            (embedding, query_id),
+                        )
+                        updated += 1
+                except Exception:
+                    skipped += 1
+            if not dry_run:
+                conn.commit()
+            offset += len(rows)
+            remaining -= len(rows)
+    finally:
+        conn.close()
+
+    index_built = False
+    if build_index and not dry_run and updated > 0:
+        # Run CONCURRENTLY — must be outside a transaction block
+        idx_conn = psycopg2.connect(**conn_params)
+        idx_conn.autocommit = True
+        try:
+            idx_cursor = idx_conn.cursor()
+            idx_cursor.execute(
+                """
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_retrieval_telemetry_qemb_hnsw
+                ON knowledge.retrieval_telemetry
+                USING hnsw (query_embedding halfvec_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+                """
+            )
+            index_built = True
+        except Exception:
+            pass
+        finally:
+            idx_conn.close()
+
+    return {
+        "processed": processed,
+        "updated": updated,
+        "skipped": skipped,
+        "dry_run": dry_run,
+        "index_built": index_built,
+    }

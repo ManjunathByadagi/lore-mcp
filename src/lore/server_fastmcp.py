@@ -148,7 +148,7 @@ mcp: FastMCP = FastMCP("knowledge-mcp", version="0.6.0", lifespan=lore_lifespan)
 
 
 # ===========================================================================
-# Tool wrappers (36). Each accepts typed params, coerces Claude Code quirks,
+# Tool wrappers (38). Each accepts typed params, coerces Claude Code quirks,
 # calls the verbatim handler, and returns a JSON string. Descriptions are
 # copied from lore.server._TOOL_DEFINITIONS to keep parity.
 # ===========================================================================
@@ -593,6 +593,28 @@ def get_hard_negatives(
     return _json(_srv.handle_get_hard_negatives(
         signal_type=signal_type, limit=limit,
         doc_id=doc_id, query_text_like=query_text_like))
+
+
+# --- Query Embedding Backfill (Issue #5 Phase 4a) (1) ----------------------
+
+
+@mcp.tool(description=(
+    "Backfill query_embedding column in retrieval_telemetry for rows that "
+    "predate Phase 4a. Processes rows in batches. Set build_index=true to also "
+    "create the HNSW index after backfill."
+))
+def backfill_query_embeddings(
+    batch_size: int = 32,
+    limit: int = 1000,
+    dry_run: bool = False,
+    build_index: bool = False,
+) -> str:
+    return _json(_srv.handle_backfill_query_embeddings({
+        "batch_size": batch_size,
+        "limit": limit,
+        "dry_run": dry_run,
+        "build_index": build_index,
+    }))
 
 
 # ===========================================================================

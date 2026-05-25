@@ -376,11 +376,13 @@ def test_ensure_telemetry_schema_applies_notes_ddl():
     telemetry.ensure_telemetry_schema(_FakeConn(cursor))
 
     base = [s.strip() for s in telemetry.TELEMETRY_PG_SCHEMA.split(";") if s.strip()]
-    # 1 table + 3 indexes + 1 notes column.
-    assert len(cursor.executed) == len(base) + 1 == 5
+    # 1 table + 3 indexes + 1 notes column + 1 query_embedding column (Phase 4a).
+    assert len(cursor.executed) == len(base) + 2 == 6
     # ensure_telemetry_schema strips the trailing ';' before executing so
     # psycopg2 receives a single semicolon-free statement (multi-statement invariant).
-    assert cursor.executed[-1] == telemetry.TELEMETRY_NOTES_DDL.rstrip(";").strip()
+    # The notes DDL precedes the query_embedding DDL; the latter is applied last.
+    assert cursor.executed[-2] == telemetry.TELEMETRY_NOTES_DDL.rstrip(";").strip()
+    assert cursor.executed[-1] == telemetry.TELEMETRY_QUERY_EMBEDDING_DDL.rstrip(";").strip()
     assert all(";" not in stmt for stmt in cursor.executed)
 
 
@@ -1166,3 +1168,317 @@ def test_fetch_hard_negatives_missing_table_returns_empty(monkeypatch, pg_db):
         signal_type=None, limit=100, doc_id=None, query_text_like=None, db=pg_db
     )
     assert result == []
+
+
+# ===========================================================================
+# Phase 4 (Issue #5): query embedding storage + re-ranking.
+#   - reranking_enabled() flag (independent of mining)
+#   - migration 008 parity (column added; HNSW index NOT auto-applied)
+#   - _write_row threads query_embedding through the INSERT
+#   - backfill_query_embeddings (dry-run, limit, encode-error tolerance)
+#   - fetch_reranking_bad_docs best-effort empty-on-error
+#   - server._apply_reranking_penalties reorder semantics
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# reranking_enabled(): decoupled from mining_enabled()
+# ---------------------------------------------------------------------------
+
+
+def test_reranking_enabled_independent_of_mining(monkeypatch):
+    """LORE_RERANKING_ENABLED enables re-ranking without LORE_HARD_NEGATIVE_MINING.
+
+    The two flags are independent: re-ranking reads hard_negative_pairs (which
+    may be populated by another process) and must not require mining to be on.
+    """
+    monkeypatch.setenv("LORE_RERANKING_ENABLED", "true")
+    monkeypatch.delenv("LORE_HARD_NEGATIVE_MINING", raising=False)
+    monkeypatch.setenv("DB_BACKEND", "local")
+    assert telemetry.reranking_enabled() is True
+    # Mining is independently False (its flag is unset).
+    assert telemetry.mining_enabled() is False
+
+
+def test_reranking_disabled_by_default(monkeypatch):
+    """No env vars set => reranking_enabled() is False."""
+    monkeypatch.delenv("LORE_RERANKING_ENABLED", raising=False)
+    assert telemetry.reranking_enabled() is False
+
+
+@pytest.mark.parametrize("flag", ["1", "true", "TRUE", "Yes", "yes"])
+def test_reranking_enabled_accepts_truthy_flags(monkeypatch, flag):
+    monkeypatch.setenv("LORE_RERANKING_ENABLED", flag)
+    assert telemetry.reranking_enabled() is True
+
+
+# ---------------------------------------------------------------------------
+# Migration 008 parity: column added, HNSW index NOT auto-applied
+# ---------------------------------------------------------------------------
+
+
+def test_migration_008_parity():
+    """migration 008 adds the query_embedding column and must NOT create the
+    HNSW index (it is deferred to the backfill_query_embeddings tool)."""
+    migration = (
+        Path(__file__).resolve().parents[1] / "migrations" / "008_query_embedding.sql"
+    )
+    text = migration.read_text()
+    assert "ADD COLUMN IF NOT EXISTS query_embedding halfvec(384)" in text
+    # The HNSW index is documented only as a comment; the executable DDL (the
+    # ALTER TABLE) must not contain an active CREATE INDEX statement.
+    sql_start = text.index("ALTER TABLE")
+    active_sql = "\n".join(
+        line for line in text[sql_start:].splitlines() if not line.strip().startswith("--")
+    )
+    assert "CREATE INDEX" not in active_sql.upper()
+    # The constant in code matches the column-add intent.
+    assert "ADD COLUMN IF NOT EXISTS query_embedding halfvec(384)" in (
+        telemetry.TELEMETRY_QUERY_EMBEDDING_DDL
+    )
+
+
+# ---------------------------------------------------------------------------
+# _write_row threads query_embedding through the INSERT
+# ---------------------------------------------------------------------------
+
+
+class _CaptureCursor:
+    """Records the SQL + params of the most recent execute()."""
+
+    def __init__(self):
+        self.sql = None
+        self.params = None
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+        self.params = params
+
+    def close(self):
+        pass
+
+
+class _CaptureConn:
+    autocommit = False
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def set_client_encoding(self, *_a, **_k):
+        pass
+
+    def cursor(self):
+        return self._cursor
+
+    def close(self):
+        pass
+
+
+def test_write_row_with_embedding(monkeypatch):
+    """_write_row includes query_embedding in the INSERT and passes the value."""
+    import psycopg2
+
+    cur = _CaptureCursor()
+    monkeypatch.setattr(psycopg2, "connect", lambda **_k: _CaptureConn(cur))
+
+    emb = [0.1] * 384
+    telemetry._write_row(
+        conn_params={"host": "h", "port": 5432, "dbname": "d", "user": "u", "password": "p"},
+        query_id="qry_emb000000",
+        query_text="q",
+        topic=None,
+        search_mode="fts",
+        retrieved_document_ids=["a"],
+        result_count=1,
+        session_id=None,
+        parent_query_id=None,
+        required_requery=False,
+        caller_agent=None,
+        model_version="0.0.0",
+        query_embedding=emb,
+    )
+    assert "query_embedding" in cur.sql
+    # The embedding is the last positional param.
+    assert cur.params[-1] == emb
+
+
+def test_write_row_without_embedding(monkeypatch):
+    """_write_row defaults query_embedding to None and passes None through."""
+    import psycopg2
+
+    cur = _CaptureCursor()
+    monkeypatch.setattr(psycopg2, "connect", lambda **_k: _CaptureConn(cur))
+
+    telemetry._write_row(
+        conn_params={"host": "h", "port": 5432, "dbname": "d", "user": "u", "password": "p"},
+        query_id="qry_noemb00000",
+        query_text="q",
+        topic=None,
+        search_mode="fts",
+        retrieved_document_ids=[],
+        result_count=0,
+        session_id=None,
+        parent_query_id=None,
+        required_requery=False,
+        caller_agent=None,
+        model_version="0.0.0",
+    )
+    assert "query_embedding" in cur.sql
+    assert cur.params[-1] is None
+
+
+# ---------------------------------------------------------------------------
+# backfill_query_embeddings: dry-run, limit, encode-error tolerance
+# ---------------------------------------------------------------------------
+
+
+class _BackfillCursor:
+    """Fakes the SELECT-batch / UPDATE flow of backfill_query_embeddings.
+
+    The first SELECT returns ``rows`` (as (query_id, query_text) tuples); any
+    subsequent SELECT returns [] so the LIMIT/OFFSET loop terminates. UPDATE
+    statements are recorded in ``updates``.
+    """
+
+    def __init__(self, rows):
+        self._rows = rows
+        self._select_calls = 0
+        self.updates: list[tuple] = []
+
+    def execute(self, sql, params=None):
+        upper = sql.strip().upper()
+        if upper.startswith("SELECT"):
+            self._select_calls += 1
+            self._last = self._rows if self._select_calls == 1 else []
+        elif upper.startswith("UPDATE"):
+            self.updates.append(params)
+        else:
+            self._last = []
+
+    def fetchall(self):
+        return self._last
+
+
+class _BackfillConn:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.commits = 0
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        self.commits += 1
+
+    def close(self):
+        pass
+
+
+def test_backfill_dry_run_does_not_write(monkeypatch, pg_db):
+    """dry_run=True computes embeddings but issues no UPDATE and reports updated=0."""
+    import psycopg2
+
+    cur = _BackfillCursor([("qry_1", "text one"), ("qry_2", "text two")])
+    monkeypatch.setattr(psycopg2, "connect", lambda **_k: _BackfillConn(cur))
+
+    result = telemetry.backfill_query_embeddings(
+        pg_db,
+        encode_fn=lambda _t: [0.0] * 384,
+        batch_size=32,
+        limit=1000,
+        dry_run=True,
+    )
+    assert result["dry_run"] is True
+    assert result["processed"] == 2
+    assert result["updated"] == 0
+    assert result["index_built"] is False
+    assert cur.updates == []  # no UPDATE executed under dry_run
+
+
+def test_backfill_respects_limit(monkeypatch, pg_db):
+    """With limit=10, no more than 10 rows are processed even if more exist."""
+    import psycopg2
+
+    # Return a full 10-row batch on the first SELECT; the loop should stop once
+    # remaining hits 0 (limit=10, batch_size=10), never issuing a second SELECT.
+    rows = [(f"qry_{i}", f"text {i}") for i in range(10)]
+    cur = _BackfillCursor(rows)
+    monkeypatch.setattr(psycopg2, "connect", lambda **_k: _BackfillConn(cur))
+
+    result = telemetry.backfill_query_embeddings(
+        pg_db,
+        encode_fn=lambda _t: [0.0] * 384,
+        batch_size=10,
+        limit=10,
+        dry_run=False,
+    )
+    assert result["processed"] <= 10
+    assert result["processed"] == 10
+    assert result["updated"] == 10
+
+
+def test_backfill_skips_encode_error(monkeypatch, pg_db):
+    """An encode_fn failure on one row is counted as skipped, not a crash."""
+    import psycopg2
+
+    cur = _BackfillCursor([("qry_1", "ok"), ("qry_2", "boom")])
+    monkeypatch.setattr(psycopg2, "connect", lambda **_k: _BackfillConn(cur))
+
+    calls = {"n": 0}
+
+    def _encode(_text):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("encode failed")
+        return [0.0] * 384
+
+    result = telemetry.backfill_query_embeddings(
+        pg_db,
+        encode_fn=_encode,
+        batch_size=32,
+        limit=1000,
+        dry_run=False,
+    )
+    assert result["processed"] == 2
+    assert result["updated"] == 1
+    assert result["skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# fetch_reranking_bad_docs: best-effort, returns [] on any error
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_reranking_bad_docs_returns_empty_on_error(monkeypatch, pg_db):
+    """A psycopg2 failure must yield [] (re-ranking is best-effort)."""
+    import psycopg2
+
+    def _boom(**_k):
+        raise psycopg2.OperationalError("connection refused")
+
+    monkeypatch.setattr(psycopg2, "connect", _boom)
+    result = telemetry.fetch_reranking_bad_docs([0.0] * 384, pg_db, 0.15)
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# server._apply_reranking_penalties: bad docs moved to end, not excluded
+# ---------------------------------------------------------------------------
+
+
+def test_apply_reranking_penalties_moves_bad_to_end(monkeypatch):
+    import lore.server as srv
+
+    monkeypatch.setattr(srv.telemetry, "fetch_reranking_bad_docs", lambda *_a, **_k: ["doc2"])
+    results = [{"kb_id": "doc1"}, {"kb_id": "doc2"}, {"kb_id": "doc3"}]
+    out = srv._apply_reranking_penalties(results, [0.0] * 384, db=object())
+    assert out == [{"kb_id": "doc1"}, {"kb_id": "doc3"}, {"kb_id": "doc2"}]
+
+
+def test_apply_reranking_penalties_empty_bad_list(monkeypatch):
+    import lore.server as srv
+
+    monkeypatch.setattr(srv.telemetry, "fetch_reranking_bad_docs", lambda *_a, **_k: [])
+    results = [{"kb_id": "doc1"}, {"kb_id": "doc2"}, {"kb_id": "doc3"}]
+    out = srv._apply_reranking_penalties(results, [0.0] * 384, db=object())
+    assert out == results

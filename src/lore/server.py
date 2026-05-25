@@ -945,6 +945,38 @@ _TOOL_DEFINITIONS = [
             },
         },
     ),
+    # Query Embedding Backfill (Issue #5 Phase 4a) (1)
+    types.Tool(
+        name="backfill_query_embeddings",
+        description=(
+            "Backfill query_embedding column in retrieval_telemetry for rows "
+            "that predate Phase 4a. Processes rows in batches. Set "
+            "build_index=true to also create the HNSW index after backfill "
+            "(runs CONCURRENTLY)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "batch_size": {
+                    "type": "integer",
+                    "description": "Rows per batch (1–200, default 32)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max rows to process (1–10000, default 1000)",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "If true, compute but do not write (default false)",
+                },
+                "build_index": {
+                    "type": "boolean",
+                    "description": "If true, CREATE INDEX CONCURRENTLY after backfill (default false)",
+                },
+            },
+            "required": [],
+        },
+    ),
 ]
 
 
@@ -1074,6 +1106,10 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
             return format_response(handle_refresh_hard_negatives(**arguments))
         elif name == "get_hard_negatives":
             return format_response(handle_get_hard_negatives(**arguments))
+
+        # Query Embedding Backfill (Issue #5 Phase 4a)
+        elif name == "backfill_query_embeddings":
+            return format_response(handle_backfill_query_embeddings(arguments))
 
         else:
             return format_response(
@@ -1411,6 +1447,20 @@ def handle_kb_add(
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
+def _apply_reranking_penalties(results: list, query_embedding: list, db) -> list:
+    """
+    Soft-penalise docs that were historically poor matches for similar queries.
+    Returns good_docs + bad_docs (bad docs moved to end, not excluded).
+    """
+    threshold = float(os.environ.get("LORE_RERANKING_THRESHOLD", "0.15"))
+    bad_doc_ids = set(telemetry.fetch_reranking_bad_docs(query_embedding, db, threshold))
+    if not bad_doc_ids:
+        return results
+    good = [r for r in results if r.get("kb_id") not in bad_doc_ids]
+    bad = [r for r in results if r.get("kb_id") in bad_doc_ids]
+    return good + bad
+
+
 def _finalize_search_response(
     resp_data: dict,
     *,
@@ -1420,6 +1470,7 @@ def _finalize_search_response(
     parent_query_id: str | None,
     required_requery: bool,
     caller_agent: str | None,
+    query_embedding=None,
 ) -> dict:
     """Attach a ``query_id`` and fire-and-forget telemetry for one kb_search.
 
@@ -1428,6 +1479,13 @@ def _finalize_search_response(
     near-zero-cost no-op: the ``resp_data`` dict is returned unchanged and no
     telemetry is written. Mutates ``resp_data`` in place and returns it so the
     caller can pass the same object to ``ResponseEnvelope.success``.
+
+    Phase 4 (Issue #5): when mining is enabled the query embedding is captured
+    here (best-effort) and threaded into the telemetry write so Phase 4b
+    re-ranking has stored embeddings to compare against. Re-ranking itself
+    (reordering ``resp_data["results"]``) is applied when LORE_RERANKING_ENABLED
+    is set and a query embedding was captured; it never excludes docs, only
+    soft-penalises historically-poor ones to the end.
     """
     if not telemetry.mining_enabled():
         return resp_data
@@ -1436,6 +1494,25 @@ def _finalize_search_response(
 
     qid = telemetry.generate_query_id()
     resp_data["query_id"] = qid
+
+    # Phase 4a: capture query embedding for telemetry (best-effort).
+    if query_embedding is None:
+        try:
+            from .embeddings import encode_text
+
+            query_embedding = encode_text(query)
+        except Exception:  # noqa: BLE001 — embedding capture is best-effort
+            query_embedding = None
+
+    # Phase 4b: soft-penalise historically-poor docs for similar queries.
+    if (
+        telemetry.reranking_enabled()
+        and resp_data.get("results")
+        and query_embedding is not None
+    ):
+        resp_data["results"] = _apply_reranking_penalties(
+            resp_data["results"], query_embedding, db
+        )
 
     results = resp_data.get("results") or []
     doc_ids = [r.get("kb_id") for r in results if r.get("kb_id")]
@@ -1453,6 +1530,7 @@ def _finalize_search_response(
         caller_agent=caller_agent,
         model_version=_lore_version,
         db=db,
+        query_embedding=query_embedding,
     )
     return resp_data
 
@@ -1852,6 +1930,37 @@ def handle_get_hard_negatives(signal_type=None, limit=100, doc_id=None, query_te
     except Exception as e:
         logger.error(f"Error fetching hard negatives: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+def handle_backfill_query_embeddings(params: dict) -> dict:
+    """Backfill the Phase 4a query_embedding column for older telemetry rows.
+
+    Gated on mining_enabled() (write path). Bounds are clamped defensively:
+    batch_size to [1, 200], limit to [1, 10000]. With build_index=true the HNSW
+    index is created CONCURRENTLY after a successful (non-dry-run) backfill.
+    """
+    batch_size = int(params.get("batch_size", 32))
+    limit = int(params.get("limit", 1000))
+    dry_run = bool(params.get("dry_run", False))
+    build_index = bool(params.get("build_index", False))
+
+    if not telemetry.mining_enabled():
+        return ResponseEnvelope.error(
+            ErrorCodes.NOT_CONFIGURED,
+            "Hard negative mining is not enabled (LORE_HARD_NEGATIVE_MINING not set)",
+        )
+
+    from .embeddings import encode_text
+
+    result = telemetry.backfill_query_embeddings(
+        db,
+        encode_fn=encode_text,
+        batch_size=max(1, min(batch_size, 200)),
+        limit=max(1, min(limit, 10000)),
+        dry_run=dry_run,
+        build_index=build_index,
+    )
+    return ResponseEnvelope.success("Backfill complete", result)
 
 
 def handle_kb_get(kb_id: str) -> dict:
