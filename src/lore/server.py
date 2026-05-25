@@ -780,6 +780,100 @@ _TOOL_DEFINITIONS = [
             "required": ["results"],
         },
     ),
+    # ================================================================
+    # RETRIEVAL TELEMETRY TOOLS (3) - Issue #5 Phase 2
+    # No-op (ok=True, data.skipped=true) unless LORE_HARD_NEGATIVE_MINING=true
+    # on a PostgreSQL backend.
+    # ================================================================
+    types.Tool(
+        name="log_retrieval_feedback",
+        description=(
+            "Score or annotate a prior kb_search result by its query_id "
+            "(retrieval telemetry, issue #5). Supply user_feedback_score, notes, "
+            "or both; an omitted field is left unchanged (cannot be reset to "
+            "null). No effect unless LORE_HARD_NEGATIVE_MINING=true on a "
+            "PostgreSQL backend."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query_id": {
+                    "type": "string",
+                    "description": "query_id returned by a prior kb_search call.",
+                },
+                "user_feedback_score": {
+                    "type": "integer",
+                    "description": (
+                        "Integer relevance/quality score for the retrieval. "
+                        "Optional; omit to leave unchanged."
+                    ),
+                },
+                "notes": {
+                    "type": "string",
+                    "description": (
+                        "Free-text note about the retrieval (truncated at 4000 "
+                        "chars). Optional; omit to leave unchanged."
+                    ),
+                },
+            },
+            "required": ["query_id"],
+        },
+    ),
+    types.Tool(
+        name="get_retrieval_telemetry",
+        description=(
+            "Read retrieval telemetry rows (issue #5). Selector precedence: "
+            "query_id > session_id > topic > recent. Returns newest-first."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query_id": {
+                    "type": "string",
+                    "description": "Return the single row for this query_id.",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Return rows for this session_id (newest-first).",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "Return rows for this topic (newest-first).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 50,
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": (
+                        "Max rows for session_id/topic/recent selectors "
+                        "(default 50, clamped to 500). Ignored for query_id."
+                    ),
+                },
+            },
+        },
+    ),
+    types.Tool(
+        name="get_telemetry_stats",
+        description=(
+            "Aggregate retrieval telemetry stats (issue #5): totals, feedback "
+            "coverage, requery count, average score, oldest/newest timestamps. "
+            "Optionally scoped by session_id and/or topic."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Restrict stats to this session_id (optional).",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "Restrict stats to this topic (optional).",
+                },
+            },
+        },
+    ),
 ]
 
 
@@ -895,6 +989,14 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
             return format_response(handle_deduplicate_results(**arguments))
         elif name == "cluster_results":
             return format_response(handle_cluster_results(**arguments))
+
+        # Retrieval Telemetry Tools (Issue #5 Phase 2)
+        elif name == "log_retrieval_feedback":
+            return format_response(handle_log_retrieval_feedback(**arguments))
+        elif name == "get_retrieval_telemetry":
+            return format_response(handle_get_retrieval_telemetry(**arguments))
+        elif name == "get_telemetry_stats":
+            return format_response(handle_get_telemetry_stats(**arguments))
 
         else:
             return format_response(
@@ -1505,6 +1607,116 @@ def handle_kb_search(
         )
     except Exception as e:
         logger.error(f"Error searching KB: {e}")
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+# =============================================================================
+# Retrieval Telemetry Analysis Handlers (Issue #5, Phase 2)
+#
+# All three are hard no-ops when mining is disabled (ok=True, data.skipped=true)
+# so callers on SQLite/Supabase or with the flag off get a clean, non-error
+# response. Reads open a fresh connection per call inside telemetry.py.
+# =============================================================================
+
+
+def handle_log_retrieval_feedback(
+    query_id: str,
+    user_feedback_score: int = None,
+    notes: str = None,
+) -> dict:
+    """Score / annotate a prior kb_search result by its ``query_id``.
+
+    Partial update: supply ``user_feedback_score``, ``notes``, or both; an
+    omitted field is left unchanged (cannot be reset to NULL). When both are
+    ``None`` this is a no-op (no DB round-trip). Returns NOT_FOUND when the
+    ``query_id`` does not exist.
+    """
+    try:
+        if not telemetry.mining_enabled():
+            return ResponseEnvelope.success(
+                "Hard negative mining disabled; feedback not recorded",
+                {"skipped": True, "query_id": query_id},
+            )
+
+        # Early no-op: nothing to update, so skip the vacuous COALESCE round-trip.
+        if user_feedback_score is None and notes is None:
+            return ResponseEnvelope.success(
+                "No feedback fields supplied; nothing to update",
+                {"noop": True, "query_id": query_id},
+            )
+
+        rows_affected = telemetry.update_retrieval_feedback(
+            query_id=query_id,
+            user_feedback_score=user_feedback_score,
+            notes=notes,
+            db=db,
+        )
+        if rows_affected is None:
+            return ResponseEnvelope.error(
+                ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable"
+            )
+        if rows_affected == 0:
+            return ResponseEnvelope.error(
+                ErrorCodes.NOT_FOUND, f"No telemetry row for query_id: {query_id}"
+            )
+        return ResponseEnvelope.success(
+            f"Recorded feedback for {query_id}",
+            {"query_id": query_id, "updated": rows_affected},
+        )
+    except Exception as e:
+        logger.error(f"Error logging retrieval feedback: {e}")
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+def handle_get_retrieval_telemetry(
+    query_id: str = None,
+    session_id: str = None,
+    topic: str = None,
+    limit: int = 50,
+) -> dict:
+    """Read telemetry rows by query_id, session_id, topic, or recent.
+
+    Selector precedence: query_id > session_id > topic > recent. Returns up to
+    ``limit`` rows (clamped to ``MAX_READ_LIMIT``) newest-first; an empty match
+    is a success with ``count=0`` (not an error).
+    """
+    try:
+        if not telemetry.mining_enabled():
+            return ResponseEnvelope.success(
+                "Hard negative mining disabled; no telemetry available",
+                {"skipped": True},
+            )
+
+        rows = telemetry.fetch_retrieval_telemetry(
+            query_id=query_id,
+            session_id=session_id,
+            topic=topic,
+            limit=limit,
+            db=db,
+        )
+        rows = rows or []
+        return ResponseEnvelope.success(
+            f"Found {len(rows)} telemetry rows",
+            {"rows": rows, "count": len(rows)},
+        )
+    except Exception as e:
+        logger.error(f"Error fetching retrieval telemetry: {e}")
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+def handle_get_telemetry_stats(session_id: str = None, topic: str = None) -> dict:
+    """Aggregate telemetry stats, optionally scoped by session_id and/or topic."""
+    try:
+        if not telemetry.mining_enabled():
+            return ResponseEnvelope.success(
+                "Hard negative mining disabled; no telemetry available",
+                {"skipped": True},
+            )
+
+        stats = telemetry.fetch_telemetry_stats(session_id=session_id, topic=topic, db=db)
+        return ResponseEnvelope.success("Telemetry stats", {"stats": stats or {}})
+    except Exception as e:
+        logger.error(f"Error fetching telemetry stats: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 

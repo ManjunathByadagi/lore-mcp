@@ -82,16 +82,27 @@ def cleanup_session(server_module, session_id):
     """Yield a session id, then delete telemetry rows under it."""
     s = server_module
     yield session_id
+    # Open a fresh, short-lived autocommit connection for teardown (mirrors the
+    # production read helpers' _pg_conn_params pattern) so the DELETE is always
+    # committed and never leaks rows in an open transaction.
     try:
-        conn = s.db._get_connection()
-        cursor = conn.cursor()
+        import psycopg2
+
+        from lore.telemetry import _pg_conn_params
+
+        conn_params = _pg_conn_params(s.db)
+        if conn_params is None:
+            return
+        conn = psycopg2.connect(**conn_params)
+        conn.autocommit = True
         try:
-            cursor.execute(
-                "DELETE FROM knowledge.retrieval_telemetry WHERE session_id = %s",
-                (session_id,),
-            )
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM knowledge.retrieval_telemetry WHERE session_id = %s",
+                    (session_id,),
+                )
         finally:
-            cursor.close()
+            conn.close()
     except Exception:
         pass
 
@@ -121,6 +132,25 @@ def _wait_for_row(s, query_id, timeout=5.0):
             return row
         time.sleep(0.05)
     return None
+
+
+def _wait_for_session_count(s, session_id, expected, timeout=5.0):
+    """Poll until at least ``expected`` rows exist for ``session_id`` (async writes)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        conn = s.db._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM knowledge.retrieval_telemetry WHERE session_id = %s",
+                (session_id,),
+            )
+            if cursor.fetchone()[0] >= expected:
+                return True
+        finally:
+            cursor.close()
+        time.sleep(0.05)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +318,128 @@ def test_write_uses_separate_connection(server_module, cleanup_session):
 
     assert "bg_conn" in seen, "background writer should open its own connection"
     assert seen["bg_conn"] is not request_conn
+
+
+# ===========================================================================
+# Phase 2 (Issue #5): notes column, feedback round-trip, partial update,
+# fetch-by-session/topic, stats aggregation, not-found, notes truncation.
+# ===========================================================================
+
+
+def test_notes_column_exists(server_module):
+    """Migration 006 / TELEMETRY_NOTES_DDL must have added the notes column."""
+    s = server_module
+    conn = s.db._get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema='knowledge' AND table_name='retrieval_telemetry' "
+            "AND column_name='notes')"
+        )
+        assert cursor.fetchone()[0] is True
+    finally:
+        cursor.close()
+
+
+def test_feedback_round_trip(server_module, cleanup_session):
+    """kb_search -> query_id -> log_feedback -> fetch -> verify score + notes."""
+    s = server_module
+    resp = s.handle_kb_search("feedback round trip", session_id=cleanup_session)
+    qid = resp["data"]["query_id"]
+    assert _wait_for_row(s, qid) is not None
+
+    fb = s.handle_log_retrieval_feedback(qid, user_feedback_score=4, notes="useful hit")
+    assert fb["ok"] is True, fb
+    assert fb["data"]["updated"] == 1
+
+    got = s.handle_get_retrieval_telemetry(query_id=qid)
+    assert got["ok"] is True
+    assert got["data"]["count"] == 1
+    row = got["data"]["rows"][0]
+    assert row["query_id"] == qid
+    assert row["user_feedback_score"] == 4
+    assert row["notes"] == "useful hit"
+
+
+def test_partial_update_coalesce(server_module, cleanup_session):
+    """Logging score-only then notes-only must not clobber the earlier field."""
+    s = server_module
+    resp = s.handle_kb_search("partial update probe", session_id=cleanup_session)
+    qid = resp["data"]["query_id"]
+    assert _wait_for_row(s, qid) is not None
+
+    assert s.handle_log_retrieval_feedback(qid, user_feedback_score=2)["ok"] is True
+    # Notes-only update: score must survive (COALESCE leaves it unchanged).
+    assert s.handle_log_retrieval_feedback(qid, notes="added later")["ok"] is True
+
+    row = s.handle_get_retrieval_telemetry(query_id=qid)["data"]["rows"][0]
+    assert row["user_feedback_score"] == 2
+    assert row["notes"] == "added later"
+
+
+def test_get_telemetry_by_session(server_module, cleanup_session):
+    s = server_module
+    for i in range(3):
+        s.handle_kb_search(f"session fetch {i}", session_id=cleanup_session)
+    # Wait for the last write to land before reading.
+    _wait_for_session_count(s, cleanup_session, 3)
+
+    got = s.handle_get_retrieval_telemetry(session_id=cleanup_session)
+    assert got["ok"] is True
+    assert got["data"]["count"] == 3
+    assert all(r["session_id"] == cleanup_session for r in got["data"]["rows"])
+
+
+def test_get_telemetry_by_topic(server_module, cleanup_session):
+    s = server_module
+    topic = f"_tele_topic_{cleanup_session}"
+    s.handle_kb_search("topic fetch probe", topic=topic, session_id=cleanup_session)
+    _wait_for_session_count(s, cleanup_session, 1)
+
+    got = s.handle_get_retrieval_telemetry(topic=topic)
+    assert got["ok"] is True
+    assert got["data"]["count"] >= 1
+    assert all(r["topic"] == topic for r in got["data"]["rows"])
+
+
+def test_get_telemetry_stats_aggregation(server_module, cleanup_session):
+    s = server_module
+    q1 = s.handle_kb_search("stats probe 1", session_id=cleanup_session)
+    q2 = s.handle_kb_search("stats probe 2", session_id=cleanup_session)
+    _wait_for_session_count(s, cleanup_session, 2)
+
+    # Give one row feedback so with_feedback/avg are exercised.
+    s.handle_log_retrieval_feedback(q1["data"]["query_id"], user_feedback_score=5)
+    s.handle_log_retrieval_feedback(q2["data"]["query_id"], notes="noted")
+
+    stats = s.handle_get_telemetry_stats(session_id=cleanup_session)
+    assert stats["ok"] is True
+    data = stats["data"]["stats"]
+    assert data["total"] == 2
+    assert data["with_feedback"] == 1
+    assert data["with_notes"] == 1
+    assert data["avg_feedback_score"] == 5.0
+    assert data["oldest"] is not None and data["newest"] is not None
+
+
+def test_log_feedback_not_found(server_module):
+    s = server_module
+    resp = s.handle_log_retrieval_feedback("qry_does_not_exist", user_feedback_score=1)
+    assert resp["ok"] is False
+    assert resp["error"] == "not_found"
+
+
+def test_notes_truncation_persists(server_module, cleanup_session):
+    s = server_module
+    from lore.telemetry import MAX_NOTES_LEN
+
+    resp = s.handle_kb_search("truncation probe", session_id=cleanup_session)
+    qid = resp["data"]["query_id"]
+    assert _wait_for_row(s, qid) is not None
+
+    long_notes = "z" * (MAX_NOTES_LEN + 1000)
+    assert s.handle_log_retrieval_feedback(qid, notes=long_notes)["ok"] is True
+
+    row = s.handle_get_retrieval_telemetry(query_id=qid)["data"]["rows"][0]
+    assert len(row["notes"]) == MAX_NOTES_LEN

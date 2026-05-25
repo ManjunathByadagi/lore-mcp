@@ -148,7 +148,7 @@ mcp: FastMCP = FastMCP("knowledge-mcp", version="0.6.0", lifespan=lore_lifespan)
 
 
 # ===========================================================================
-# Tool wrappers (31). Each accepts typed params, coerces Claude Code quirks,
+# Tool wrappers (34). Each accepts typed params, coerces Claude Code quirks,
 # calls the verbatim handler, and returns a JSON string. Descriptions are
 # copied from lore.server._TOOL_DEFINITIONS to keep parity.
 # ===========================================================================
@@ -499,6 +499,64 @@ def deduplicate_results(results: list[dict], threshold: float = 0.9) -> str:
 @mcp.tool(description="Cluster search results by topic/source type")
 def cluster_results(results: list[dict], num_clusters: int = 5) -> str:
     return _json(_srv.handle_cluster_results(results=results, num_clusters=num_clusters))
+
+
+# --- Retrieval Telemetry (3) — Issue #5 Phase 2 ----------------------------
+
+
+@mcp.tool(
+    description=(
+        "Score or annotate a prior kb_search result by its query_id "
+        "(retrieval telemetry, issue #5). Supply user_feedback_score, notes, or "
+        "both; an omitted field is left unchanged (cannot be reset to null). No "
+        "effect unless LORE_HARD_NEGATIVE_MINING=true on a PostgreSQL backend."
+    )
+)
+def log_retrieval_feedback(
+    query_id: str,
+    user_feedback_score: int | None = None,
+    notes: str | None = None,
+) -> str:
+    return _json(
+        _srv.handle_log_retrieval_feedback(
+            query_id=query_id,
+            user_feedback_score=user_feedback_score,
+            notes=notes,
+        )
+    )
+
+
+@mcp.tool(
+    description=(
+        "Read retrieval telemetry rows (issue #5). Selector precedence: "
+        "query_id > session_id > topic > recent. Returns newest-first."
+    )
+)
+def get_retrieval_telemetry(
+    query_id: str | None = None,
+    session_id: str | None = None,
+    topic: str | None = None,
+    limit: int = 50,
+) -> str:
+    return _json(
+        _srv.handle_get_retrieval_telemetry(
+            query_id=query_id,
+            session_id=session_id,
+            topic=topic,
+            limit=limit,
+        )
+    )
+
+
+@mcp.tool(
+    description=(
+        "Aggregate retrieval telemetry stats (issue #5): totals, feedback "
+        "coverage, requery count, average score, oldest/newest timestamps. "
+        "Optionally scoped by session_id and/or topic."
+    )
+)
+def get_telemetry_stats(session_id: str | None = None, topic: str | None = None) -> str:
+    return _json(_srv.handle_get_telemetry_stats(session_id=session_id, topic=topic))
 
 
 # ===========================================================================
