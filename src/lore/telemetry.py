@@ -689,8 +689,16 @@ def fetch_hard_negatives(
         clauses.append("doc_id = %s")
         params.append(doc_id)
     if query_text_like is not None:
-        clauses.append("query_text ILIKE %s")
-        params.append(f"%{query_text_like}%")
+        # Escape ILIKE special characters so user input is treated as literals
+        escaped = (
+            query_text_like
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        like_param = f"%{escaped}%"
+        clauses.append("query_text ILIKE %s ESCAPE '\\'")
+        params.append(like_param)
 
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = (

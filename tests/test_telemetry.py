@@ -892,6 +892,56 @@ def test_fetch_hard_negatives_none_for_non_pg():
     )
 
 
+def test_refresh_dry_run_rolls_back_not_commits(monkeypatch, pg_db):
+    """dry_run=True must ROLLBACK the transaction, never COMMIT."""
+    rolled_back = []
+    committed = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, *a, **kw):
+            pass
+
+        def executemany(self, *a, **kw):
+            pass
+
+        def fetchone(self):
+            return (0,)  # for the COUNT(*) queries
+
+        def fetchall(self):
+            return []
+
+    class FakeConn:
+        autocommit = True  # set to False by the function
+
+        def set_client_encoding(self, *a, **kw):
+            pass
+
+        def cursor(self, **kw):
+            return FakeCursor()
+
+        def rollback(self):
+            rolled_back.append(1)
+
+        def commit(self):
+            committed.append(1)
+
+        def close(self):
+            pass
+
+    _patch_connect(monkeypatch, FakeConn())
+
+    result = telemetry.refresh_hard_negative_pairs(since=None, dry_run=True, db=pg_db)
+    assert result["dry_run"] is True
+    assert len(rolled_back) == 1, "rollback() must be called exactly once"
+    assert len(committed) == 0, "commit() must never be called on dry_run"
+
+
 # ---------------------------------------------------------------------------
 # fetch_hard_negatives: filter clauses + parameterized ILIKE
 # ---------------------------------------------------------------------------
