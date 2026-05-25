@@ -218,8 +218,8 @@ def kb_get(kb_id: str) -> str:
 
 
 @mcp.tool(description="List KB entries")
-def kb_list(topic: str | None = None) -> str:
-    return _json(_srv.handle_kb_list(topic=topic))
+def kb_list(topic: str | None = None, limit: int = 100, offset: int = 0) -> str:
+    return _json(_srv.handle_kb_list(topic=topic, limit=limit, offset=offset))
 
 
 @mcp.tool(description="Update existing KB entry content, title, topic, tags, and verified state")
@@ -387,7 +387,7 @@ async def kb_ingest_dir(
 
 
 @mcp.tool(description="Check sync state between source docs and KB")
-def kb_sync_status(dir_path: str) -> str:
+def kb_sync_status(dir_path: str | None = None) -> str:
     return _json(_srv.handle_kb_sync_status(dir_path=dir_path))
 
 
@@ -486,8 +486,19 @@ def search_transcripts(query: str, speaker: str | None = None) -> str:
     return _json(_srv.handle_search_transcripts(query=query, speaker=speaker))
 
 
-@mcp.tool(description="Combined search across all sources (local, knowledge, corpora, transcripts)")
+@mcp.tool(
+    description=(
+        "Search across all configured sources simultaneously (KB, local files, "
+        "transcripts, corpora) with a single query. Returns combined results from "
+        "all available sources. For searching within a specific source only, use "
+        "kb_search, search_local, search_transcripts, or search_corpora instead."
+    )
+)
 def multi_search(query: str) -> str:
+    """Search across all configured sources simultaneously (KB, local files,
+    transcripts, corpora) with a single query. Returns combined results from all
+    available sources. For searching within a specific source only, use
+    kb_search, search_local, search_transcripts, or search_corpora instead."""
     return _json(_srv.handle_multi_search(query=query))
 
 

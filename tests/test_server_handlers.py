@@ -306,3 +306,164 @@ def test_kb_search_top_k_zero_returns_error(monkeypatch):
 def test_kb_search_top_k_schema_minimum():
     schema = srv._TOOL_SCHEMA_MAP["kb_search"]
     assert schema["properties"]["top_k"]["minimum"] == 1
+
+
+# ---------------------------------------------------------------------------
+# BUG-4: kb_list pagination (limit / offset / total_count / has_more)
+# ---------------------------------------------------------------------------
+
+
+class _FakeListQuery:
+    """Records the limit/offset applied to a kb_list query.
+
+    Mirrors the fluent chain handle_kb_list uses:
+    db.table(...).select(..., count="exact").order(...).eq(...)?.limit(n).offset(m).execute()
+    The configured rows are returned as data and total_count as QueryResult.count.
+    """
+
+    def __init__(self, db: "_FakeListDb"):
+        self._db = db
+
+    def select(self, *_a, **_k):
+        return self
+
+    def order(self, column, **kwargs):
+        self._db.applied_order = (column, kwargs)
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def limit(self, count):
+        self._db.applied_limit = count
+        return self
+
+    def offset(self, count):
+        self._db.applied_offset = count
+        return self
+
+    def execute(self):
+        return QueryResult(data=list(self._db.rows), count=self._db.total_count)
+
+
+class _FakeListDb:
+    def __init__(self, rows=None, total_count=0):
+        self.rows = rows if rows is not None else []
+        self.total_count = total_count
+        self.applied_limit = None
+        self.applied_offset = None
+        self.applied_order = None
+
+    def table(self, _name):
+        return _FakeListQuery(self)
+
+
+def test_kb_list_default_pagination(monkeypatch):
+    """No params: limit defaults to 100, offset to 0, has_more present."""
+    rows = [{"kb_id": f"kb_{i}"} for i in range(3)]
+    fake = _FakeListDb(rows=rows, total_count=3)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_list()
+    assert resp["ok"] is True
+    assert resp["data"]["limit"] == 100
+    assert resp["data"]["offset"] == 0
+    assert "has_more" in resp["data"]
+    assert resp["data"]["has_more"] is False
+    assert resp["data"]["total_count"] == 3
+    assert fake.applied_limit == 100
+    assert fake.applied_offset == 0
+    assert fake.applied_order == ("created_at", {"desc": True})
+
+
+def test_kb_list_with_limit_and_offset(monkeypatch):
+    """limit=5, offset=10 are passed verbatim into the query (LIMIT/OFFSET)."""
+    rows = [{"kb_id": f"kb_{i}"} for i in range(5)]
+    fake = _FakeListDb(rows=rows, total_count=42)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_list(limit=5, offset=10)
+    assert resp["ok"] is True
+    assert fake.applied_limit == 5
+    assert fake.applied_offset == 10
+    assert resp["data"]["limit"] == 5
+    assert resp["data"]["offset"] == 10
+    assert resp["data"]["total_count"] == 42
+    # offset(10) + 5 returned < 42 total -> there are more pages.
+    assert resp["data"]["has_more"] is True
+
+
+def test_kb_list_limit_clamped(monkeypatch):
+    """limit=9999 is clamped to the 500 maximum."""
+    fake = _FakeListDb(rows=[], total_count=0)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_list(limit=9999)
+    assert resp["ok"] is True
+    assert fake.applied_limit == 500
+    assert resp["data"]["limit"] == 500
+
+
+def test_kb_list_schema_has_pagination():
+    schema = srv._TOOL_SCHEMA_MAP["kb_list"]
+    props = schema["properties"]
+    assert props["limit"]["minimum"] == 1
+    assert props["limit"]["maximum"] == 500
+    assert props["offset"]["minimum"] == 0
+
+
+# ---------------------------------------------------------------------------
+# BUG-5: multi_search description reflects cross-source (not multi-query) search
+# ---------------------------------------------------------------------------
+
+
+def test_multi_search_description_updated():
+    schema_desc = next(
+        t.description for t in srv._TOOL_DEFINITIONS if t.name == "multi_search"
+    )
+    assert "across all configured sources" in schema_desc
+    assert "multiple queries" not in schema_desc.lower()
+
+
+# ---------------------------------------------------------------------------
+# BUG-6: kb_sync_status dir_path optional with env-var fallback
+# ---------------------------------------------------------------------------
+
+
+def test_kb_sync_status_no_dir_uses_env_var(monkeypatch, tmp_path):
+    """With LORE_SYNC_DIR set, calling with no dir_path is NOT a validation error."""
+    monkeypatch.setenv("LORE_SYNC_DIR", str(tmp_path))
+    monkeypatch.delenv("LORE_KB_DIR", raising=False)
+
+    # Stub the DB sync-record read so the handler reaches its normal success path.
+    class _SyncDb:
+        def table(self, _name):
+            return self
+
+        def select(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            return QueryResult(data=[])
+
+    monkeypatch.setattr(srv, "db", _SyncDb())
+
+    resp = srv.handle_kb_sync_status()
+    assert resp["ok"] is True
+    assert resp.get("error") is None
+
+
+def test_kb_sync_status_no_dir_no_env_returns_not_configured(monkeypatch):
+    """Neither dir_path nor env var: clean not_configured error, not a crash."""
+    monkeypatch.delenv("LORE_SYNC_DIR", raising=False)
+    monkeypatch.delenv("LORE_KB_DIR", raising=False)
+
+    resp = srv.handle_kb_sync_status()
+    assert resp["ok"] is False
+    assert resp["error"] == "not_configured"
+    assert resp["error"] != "unexpected_exception"
+
+
+def test_kb_sync_status_schema_dir_path_optional():
+    schema = srv._TOOL_SCHEMA_MAP["kb_sync_status"]
+    assert "dir_path" not in schema.get("required", [])

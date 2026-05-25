@@ -338,7 +338,21 @@ _TOOL_DEFINITIONS = [
         description="List KB entries",
         inputSchema={
             "type": "object",
-            "properties": {"topic": {"type": "string", "description": "Filter by topic"}},
+            "properties": {
+                "topic": {"type": "string", "description": "Filter by topic"},
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of entries to return (1–500, default 100)",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "default": 100,
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of entries to skip for pagination (default 0)",
+                    "minimum": 0,
+                },
+            },
         },
     ),
     types.Tool(
@@ -568,8 +582,16 @@ _TOOL_DEFINITIONS = [
         description="Check sync state between source docs and KB",
         inputSchema={
             "type": "object",
-            "properties": {"dir_path": {"type": "string", "description": "Directory to check"}},
-            "required": ["dir_path"],
+            "properties": {
+                "dir_path": {
+                    "type": "string",
+                    "description": (
+                        "Directory to check. Optional: defaults to LORE_SYNC_DIR "
+                        "(or LORE_KB_DIR) when not provided. Returns a not_configured "
+                        "error if neither is set."
+                    ),
+                }
+            },
         },
     ),
     # Semantic Search Tools (2) - v0.6
@@ -740,7 +762,12 @@ _TOOL_DEFINITIONS = [
     ),
     types.Tool(
         name="multi_search",
-        description="Combined search across all sources (local, knowledge, corpora, transcripts)",
+        description=(
+            "Search across all configured sources simultaneously (KB, local files, "
+            "transcripts, corpora) with a single query. Returns combined results from "
+            "all available sources. For searching within a specific source only, use "
+            "kb_search, search_local, search_transcripts, or search_corpora instead."
+        ),
         inputSchema={
             "type": "object",
             "properties": {"query": {"type": "string", "description": "Search query"}},
@@ -2029,23 +2056,50 @@ def handle_kb_get(kb_id: str) -> dict:
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_kb_list(topic: str = None) -> dict:
-    """List KB entries."""
+def handle_kb_list(topic: str = None, limit: int = 100, offset: int = 0) -> dict:
+    """List KB entries with pagination.
+
+    ``limit`` is clamped to [1, 500] (default 100) and ``offset`` to [0, ∞)
+    (default 0). ``total_count`` reflects all matching rows (ignoring
+    pagination) so callers can detect further pages via ``has_more``.
+    """
     try:
+        limit = max(1, min(500, int(limit)))
+        offset = max(0, int(offset))
+
         query = (
             db.table("knowledge.kb_entries")
-            .select("kb_id, topic, title, tags, author, source_type, verified, created_at")
-            .order("created_at", desc=True)
+            .select(
+                "kb_id, topic, title, tags, author, source_type, verified, created_at",
+                count="exact",
+            )
         )
 
         if topic:
             query = query.eq("topic", topic)
 
-        result = query.limit(100).execute()
+        query = query.order("created_at", desc=True)
+
+        result = query.limit(limit).offset(offset).execute()
+
+        results = result.data or []
+        if result.count is None and len(results) == limit:
+            logger.warning(
+                "kb_list: count unavailable and full page returned — has_more may be incorrect"
+            )
+        total_count = result.count if result.count is not None else len(results)
+        has_more = (offset + len(results)) < total_count
 
         return ResponseEnvelope.success(
-            f"Found {len(result.data)} KB entries",
-            {"entries": result.data, "count": len(result.data)},
+            f"Found {len(results)} KB entries",
+            {
+                "entries": results,
+                "count": len(results),
+                "limit": limit,
+                "offset": offset,
+                "total_count": total_count,
+                "has_more": has_more,
+            },
         )
     except Exception as e:
         logger.error(f"Error listing KB entries: {e}")
@@ -2827,9 +2881,22 @@ async def handle_kb_ingest_dir(
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_kb_sync_status(dir_path: str) -> dict:
-    """Check sync state between source docs and KB."""
+def handle_kb_sync_status(dir_path: str = None) -> dict:
+    """Check sync state between source docs and KB.
+
+    ``dir_path`` is optional: when omitted it falls back to the ``LORE_SYNC_DIR``
+    (or legacy ``LORE_KB_DIR``) environment variable. If neither is provided,
+    a clean ``not_configured`` error is returned rather than a validation crash.
+    """
     try:
+        if not (dir_path and dir_path.strip()):
+            dir_path = os.environ.get("LORE_SYNC_DIR") or os.environ.get("LORE_KB_DIR")
+        if not dir_path:
+            return ResponseEnvelope.error(
+                ErrorCodes.NOT_CONFIGURED,
+                "dir_path is required when LORE_SYNC_DIR is not configured",
+            )
+
         dir_path = Path(dir_path).resolve()
         if not dir_path.exists():
             return ResponseEnvelope.error(ErrorCodes.NOT_FOUND, f"Directory not found: {dir_path}")
