@@ -1076,6 +1076,19 @@ def test_fetch_hard_negatives_all_filters_parameterized(monkeypatch, pg_db):
     assert params == ("explicit", "kb-7", "%needle%", 10)
 
 
+@pytest.mark.parametrize("given,expected", [(0, 1), (-5, 1), (1, 1), (50, 50)])
+def test_get_hard_negatives_limit_zero_clamped(monkeypatch, pg_db, given, expected):
+    """BUG-9: limit reaching fetch_hard_negatives is floored to 1 so a 0/negative
+    limit can never bind as LIMIT 0/negative (which would return all rows)."""
+    cur = _FakeRWCursor(fetchall=[])
+    _patch_connect(monkeypatch, _FakeConn(cur))
+    telemetry.fetch_hard_negatives(
+        signal_type=None, limit=given, doc_id=None, query_text_like=None, db=pg_db
+    )
+    _sql, params = cur.executed[0]
+    assert params[-1] == expected  # the LIMIT bind value is clamped to >= 1
+
+
 # ---------------------------------------------------------------------------
 # Handler: handle_refresh_hard_negatives
 # ---------------------------------------------------------------------------

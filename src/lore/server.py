@@ -343,13 +343,13 @@ _TOOL_DEFINITIONS = [
     ),
     types.Tool(
         name="kb_update",
-        description="Update existing KB entry content and metadata",
+        description="Update existing KB entry content, title, topic, tags, and verified state",
         inputSchema={
             "type": "object",
             "properties": {
-                "entry_id": {"type": "string", "description": "UUID of entry to update"},
+                "kb_id": {"type": "string", "description": "kb_id of entry to update"},
+                "title": {"type": "string", "description": "New title"},
                 "content": {"type": "string", "description": "New content text"},
-                "metadata": {"type": "object", "description": "Updated metadata object"},
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -361,7 +361,11 @@ _TOOL_DEFINITIONS = [
                     "description": "Mark entry as human-verified (true), disputed (false), or reset to unreviewed (null).",
                 },
             },
-            "required": ["entry_id"],
+            "required": ["kb_id"],
+            # BUG-1: reject unknown fields (e.g. the removed `metadata`) at the
+            # MCP boundary so they surface as a clean invalid_input validation
+            # error instead of a TypeError leaked as unexpected_exception.
+            "additionalProperties": False,
         },
     ),
     types.Tool(
@@ -370,14 +374,14 @@ _TOOL_DEFINITIONS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "entry_id": {"type": "string", "description": "UUID of entry to delete"},
+                "kb_id": {"type": "string", "description": "kb_id of entry to delete"},
                 "confirm": {
                     "type": "boolean",
                     "description": "Confirmation flag for safety",
                     "default": False,
                 },
             },
-            "required": ["entry_id"],
+            "required": ["kb_id"],
         },
     ),
     # Investigations Tools (5)
@@ -808,8 +812,10 @@ _TOOL_DEFINITIONS = [
                 },
                 "user_feedback_score": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5,
                     "description": (
-                        "Integer relevance/quality score for the retrieval. "
+                        "Integer relevance/quality score for the retrieval (1-5). "
                         "Optional; omit to leave unchanged."
                     ),
                 },
@@ -1602,7 +1608,11 @@ def handle_kb_search(
             top_k_int = int(top_k)
         except (TypeError, ValueError):
             top_k_int = 20
-        top_k_int = max(1, min(200, top_k_int))
+        # BUG-8: top_k below 1 is meaningless (top_k=0 previously returned 1
+        # result via the legacy LIKE path's max(top_k, 50) floor). Reject it.
+        if top_k_int < 1:
+            return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, "top_k must be at least 1")
+        top_k_int = min(200, top_k_int)
 
         # Decide whether we can actually use the semantic/hybrid path.
         backend = os.getenv("DB_BACKEND", "").strip().lower()
@@ -1805,6 +1815,23 @@ def handle_log_retrieval_feedback(
     string ("true"/"false"/"1"); it is coerced to a bool here.
     """
     try:
+        # BUG-7: reject out-of-range scores before any DB work so a bad value
+        # can never corrupt avg_feedback_score in the stats aggregate.
+        if user_feedback_score is not None:
+            try:
+                score_int = int(user_feedback_score)
+            except (TypeError, ValueError):
+                return ResponseEnvelope.error(
+                    ErrorCodes.INVALID_INPUT,
+                    "user_feedback_score must be between 1 and 5",
+                )
+            if not 1 <= score_int <= 5:
+                return ResponseEnvelope.error(
+                    ErrorCodes.INVALID_INPUT,
+                    "user_feedback_score must be between 1 and 5",
+                )
+            user_feedback_score = score_int
+
         if not telemetry.mining_enabled():
             return ResponseEnvelope.success(
                 "Hard negative mining disabled; feedback not recorded",
@@ -2029,21 +2056,31 @@ _VERIFIED_SENTINEL = object()
 
 
 def handle_kb_update(
-    entry_id: str,
+    kb_id: str = None,
     content: str = None,
-    metadata: dict = None,
+    title: str = None,
     tags: list = None,
     topic: str = None,
     verified: Any = _VERIFIED_SENTINEL,
+    entry_id: str = None,
 ) -> dict:
     """Update existing KB entry with partial updates support.
 
     Updates only the provided fields, preserving existing fields not specified.
-    Re-embeds content if content changes. Updates updated_at timestamp.
+    Re-embeds content if title/content changes. Updates updated_at timestamp.
+
+    The entry is identified by ``kb_id`` (preferred, matching the rest of the
+    KB API); ``entry_id`` is accepted as a deprecated fallback (BUG-3).
 
     `verified` accepts True (human-verified), False (disputed), or None (reset to
     unreviewed). Omit the argument entirely to leave the verified state unchanged.
     """
+    import psycopg2
+
+    # BUG-3: accept kb_id as the primary param name; fall back to entry_id.
+    entry_id = kb_id or entry_id
+    if not entry_id:
+        return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, "kb_id is required")
     try:
         # First, verify the entry exists
         existing_result = (
@@ -2067,14 +2104,8 @@ def handle_kb_update(
             # Note: In a full implementation, you'd regenerate embeddings here
             # when content changes. This is simplified for the basic CRUD operation.
 
-        if metadata is not None:
-            # Merge with existing metadata if it exists
-            current_metadata = existing_entry.get("metadata", {})
-            if isinstance(current_metadata, dict):
-                current_metadata.update(metadata)
-                update_data["metadata"] = current_metadata
-            else:
-                update_data["metadata"] = metadata
+        if title is not None:
+            update_data["title"] = title
 
         if tags is not None:
             # kb_entries.tags is a text[] column — pass the Python list through
@@ -2096,11 +2127,17 @@ def handle_kb_update(
         if set(update_data.keys()) == {"updated_at"}:
             return ResponseEnvelope.error(
                 ErrorCodes.INVALID_INPUT,
-                "No fields provided for update. Specify content, metadata, tags, topic, and/or verified.",
+                "No fields provided for update. Specify content, title, tags, topic, and/or verified.",
             )
 
-        # Perform the update
-        db.table("knowledge.kb_entries").update(update_data).eq("kb_id", entry_id).execute()
+        # Perform the update. BUG-1: an unknown/unsupported column reaching the
+        # SQL UPDATE raises psycopg2.ProgrammingError (e.g. UndefinedColumn);
+        # translate it into a clean invalid_input response instead of leaking
+        # the raw SQL error as an unexpected_exception.
+        try:
+            db.table("knowledge.kb_entries").update(update_data).eq("kb_id", entry_id).execute()
+        except psycopg2.ProgrammingError:
+            return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, "Field not supported")
 
         # Fetch and return the updated entry
         updated_result = (
@@ -2143,13 +2180,21 @@ def handle_kb_update(
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_kb_delete(entry_id: str, confirm: bool = False) -> dict:
+def handle_kb_delete(kb_id: str = None, confirm: bool = False, entry_id: str = None) -> dict:
     """Delete existing KB entry from database with safety confirmation.
+
+    The entry is identified by ``kb_id`` (preferred, matching the rest of the
+    KB API); ``entry_id`` is accepted as a deprecated fallback (BUG-3).
 
     Requires explicit confirmation for safety. Deletes entry and associated embeddings.
     Returns deleted entry details for audit trail.
     """
+    # BUG-3: accept kb_id as the primary param name; fall back to entry_id.
+    entry_id = kb_id or entry_id
     try:
+        if not entry_id:
+            return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, "kb_id is required")
+
         # Safety check: require explicit confirmation
         if not confirm:
             return ResponseEnvelope.error(
@@ -3606,19 +3651,38 @@ def handle_multi_search(query: str) -> dict:
 
 
 def handle_deduplicate_results(results: list[dict], threshold: float = 0.9) -> dict:
-    """Remove duplicate search results."""
+    """Remove duplicate search results.
+
+    De-dup key selection (BUG-2): items carrying text/content/snippet are
+    de-duplicated on that normalized text. Items WITHOUT any such field (e.g.
+    kb_search results, which only have kb_id/title/topic/score) fall back to
+    their ``kb_id`` as the identity key — so two results with different kb_ids
+    are never collapsed into one, while a repeated kb_id is still removed.
+    Items with neither a text field nor a kb_id are always kept.
+    """
     try:
         # Simple deduplication based on exact text matches
         seen = set()
         deduped = []
 
         for result in results:
-            # Create a key from result text/content
-            key = result.get("text", "") or result.get("content", "") or result.get("snippet", "")
-            key_normalized = key.lower().strip()
+            # Prefer a text/content/snippet key; fall back to kb_id when the
+            # item has no content field (or it is empty), so content-less
+            # search results are de-duped by identity, not collapsed together.
+            text = result.get("text", "") or result.get("content", "") or result.get("snippet", "")
+            text_normalized = text.lower().strip() if isinstance(text, str) else ""
 
-            if key_normalized and key_normalized not in seen:
-                seen.add(key_normalized)
+            if text_normalized:
+                key = ("text", text_normalized)
+            elif result.get("kb_id"):
+                key = ("kb_id", result["kb_id"])
+            else:
+                # Nothing to key on — keep the item rather than dropping it.
+                deduped.append(result)
+                continue
+
+            if key not in seen:
+                seen.add(key)
                 deduped.append(result)
 
         removed = len(results) - len(deduped)

@@ -724,6 +724,11 @@ def fetch_hard_negatives(
     if conn_params is None:
         return None
 
+    # BUG-9: a limit of 0 (or negative) previously fell through to the SQL
+    # ``LIMIT 0``/no-op and returned every row; floor it to 1 (mirrors the
+    # batch_size clamp in backfill_query_embeddings).
+    limit = max(1, int(limit))
+
     clauses: list[str] = []
     params: list[Any] = []
     if signal_type is not None:

@@ -222,11 +222,11 @@ def kb_list(topic: str | None = None) -> str:
     return _json(_srv.handle_kb_list(topic=topic))
 
 
-@mcp.tool(description="Update existing KB entry content and metadata")
+@mcp.tool(description="Update existing KB entry content, title, topic, tags, and verified state")
 def kb_update(
-    entry_id: str,
+    kb_id: str,
     content: str | None = None,
-    metadata: dict | None = None,
+    title: str | None = None,
     tags: str | list[str] | None = None,
     topic: str | None = None,
     verified: bool | None = _VERIFIED_SENTINEL,
@@ -235,9 +235,9 @@ def kb_update(
     # client actually supplied it (so omission != reset-to-null).
     return _json(
         _srv.handle_kb_update(
-            entry_id=entry_id,
+            kb_id=kb_id,
             content=content,
-            metadata=metadata,
+            title=title,
             tags=_coerce_tags(tags),
             topic=topic,
             verified=verified,
@@ -246,8 +246,8 @@ def kb_update(
 
 
 @mcp.tool(description="Delete existing KB entry from database")
-def kb_delete(entry_id: str, confirm: bool = False) -> str:
-    return _json(_srv.handle_kb_delete(entry_id=entry_id, confirm=confirm))
+def kb_delete(kb_id: str, confirm: bool = False) -> str:
+    return _json(_srv.handle_kb_delete(kb_id=kb_id, confirm=confirm))
 
 
 # --- Investigations (5) ----------------------------------------------------
