@@ -74,11 +74,28 @@ CREATE INDEX IF NOT EXISTS idx_retrieval_telemetry_parent ON knowledge.retrieval
 """
 
 
-def ensure_telemetry_schema(conn) -> None:
-    """Create the retrieval_telemetry table + indexes if absent.
+# Phase 2 (Issue #5): the ``notes`` column is added by a *separate* idempotent
+# DDL statement rather than by editing TELEMETRY_PG_SCHEMA (which stays frozen
+# and byte-for-byte identical to migration 005). This single statement mirrors
+# migrations/006_telemetry_notes.sql (a unit test enforces parity).
+TELEMETRY_NOTES_DDL = (
+    "ALTER TABLE knowledge.retrieval_telemetry ADD COLUMN IF NOT EXISTS notes TEXT"
+)
 
-    Idempotent (CREATE ... IF NOT EXISTS). Called from
-    ``LocalPostgresClient._init_schema`` inside an isolated try/except so a
+# Phase 2 bounds (Issue #5):
+#   - MAX_NOTES_LEN     caps stored feedback notes (defensive truncation).
+#   - MAX_READ_LIMIT    hard ceiling on rows a read tool may return.
+#   - DEFAULT_READ_LIMIT default when the caller supplies no/invalid limit.
+MAX_NOTES_LEN = 4000
+MAX_READ_LIMIT = 500
+DEFAULT_READ_LIMIT = 50
+
+
+def ensure_telemetry_schema(conn) -> None:
+    """Create the retrieval_telemetry table + indexes (+ notes column) if absent.
+
+    Idempotent (CREATE ... IF NOT EXISTS / ADD COLUMN IF NOT EXISTS). Called
+    from ``LocalPostgresClient._init_schema`` inside an isolated try/except so a
     failure here can never disturb the rest of schema initialisation.
     Uses the *existing* request connection (autocommit) for the one-time DDL.
     """
@@ -87,13 +104,35 @@ def ensure_telemetry_schema(conn) -> None:
         # psycopg2's cursor.execute() runs only the first statement in a
         # multi-statement string, so split on ';' and execute each non-empty
         # statement individually (otherwise the 3 CREATE INDEX statements are
-        # silently dropped on a fresh database).
-        for stmt in TELEMETRY_PG_SCHEMA.split(";"):
-            stmt = stmt.strip()
-            if stmt:
-                cursor.execute(stmt)
+        # silently dropped on a fresh database). The Phase 2 notes column
+        # (migration 006) is applied as one more statement after the base schema.
+        statements = [s.strip() for s in TELEMETRY_PG_SCHEMA.split(";") if s.strip()]
+        statements.append(TELEMETRY_NOTES_DDL)
+        for stmt in statements:
+            cursor.execute(stmt)
     finally:
         cursor.close()
+
+
+def _pg_conn_params(db: Any) -> dict | None:
+    """Extract psycopg2 connection params from a ``LocalPostgresClient``.
+
+    Returns ``None`` for any non-PostgreSQL ``db`` (SQLite/Supabase/test fakes),
+    mirroring the backend guard in ``write_retrieval_telemetry_async``. Read
+    functions use this to open a *fresh* connection per call rather than sharing
+    ``db._conn`` (which is not safe for concurrent use across request threads).
+    """
+    from lore.db_client import LocalPostgresClient
+
+    if not isinstance(db, LocalPostgresClient):
+        return None
+    return {
+        "host": db.host,
+        "port": db.port,
+        "dbname": db.database,
+        "user": db.user,
+        "password": db.password,
+    }
 
 
 def write_retrieval_telemetry_async(
@@ -224,3 +263,172 @@ def _write_row(
                 conn.close()
             except Exception:  # noqa: BLE001
                 pass
+
+
+# ===========================================================================
+# Phase 2 (Issue #5): synchronous read / update helpers for the analysis tools.
+#
+# Unlike the write path these run on the request thread — the caller awaits the
+# result — so they must NOT share ``db._conn``. Each opens a *fresh* connection
+# (via _pg_conn_params) and closes it within the call. All three return ``None``
+# for a non-PostgreSQL backend so handlers can map that to a clean no-op.
+# ===========================================================================
+
+# Columns returned by fetch_retrieval_telemetry, in a stable order. ``created_at``
+# (TIMESTAMPTZ) is serialised by server.json_serializer — no extra handling here.
+_TELEMETRY_READ_COLUMNS = (
+    "query_id, query_text, topic, search_mode, retrieved_document_ids, "
+    "result_count, session_id, parent_query_id, required_requery, caller_agent, "
+    "user_feedback_score, notes, model_version, created_at"
+)
+
+
+def clamp_read_limit(limit: Any) -> int:
+    """Coerce an arbitrary ``limit`` into ``1..MAX_READ_LIMIT``.
+
+    Non-integer / missing values fall back to ``DEFAULT_READ_LIMIT``; values are
+    then clamped to ``[1, MAX_READ_LIMIT]`` so a hostile or sloppy caller can
+    neither exhaust the table nor request a non-positive page.
+    """
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        value = DEFAULT_READ_LIMIT
+    return max(1, min(MAX_READ_LIMIT, value))
+
+
+def update_retrieval_feedback(
+    *,
+    query_id: str,
+    user_feedback_score: int | None,
+    notes: str | None,
+    db: Any,
+) -> int | None:
+    """Apply caller feedback to one telemetry row; return rows affected.
+
+    Partial update via COALESCE: a ``None`` argument leaves that column
+    unchanged (so the caller may set the score, the notes, or both). A
+    consequence — documented as a limitation — is that neither field can be
+    *reset* to NULL through this path.
+
+    ``notes`` is defensively truncated to ``MAX_NOTES_LEN`` before storage.
+    Returns ``cursor.rowcount`` (0 when ``query_id`` is unknown), or ``None``
+    when ``db`` is not a PostgreSQL client.
+    """
+    import psycopg2
+
+    conn_params = _pg_conn_params(db)
+    if conn_params is None:
+        return None
+
+    if notes is not None and len(notes) > MAX_NOTES_LEN:
+        notes = notes[:MAX_NOTES_LEN]
+
+    conn = psycopg2.connect(**conn_params)
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE knowledge.retrieval_telemetry
+                   SET user_feedback_score = COALESCE(%s, user_feedback_score),
+                       notes               = COALESCE(%s, notes)
+                 WHERE query_id = %s
+                """,
+                (user_feedback_score, notes, query_id),
+            )
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
+def fetch_retrieval_telemetry(
+    *,
+    query_id: str | None,
+    session_id: str | None,
+    topic: str | None,
+    limit: Any,
+    db: Any,
+) -> list[dict] | None:
+    """Read telemetry rows by the first selector provided.
+
+    Selector precedence: ``query_id`` > ``session_id`` > ``topic`` > recent.
+    ``query_id`` returns the single matching row (still as a list); the other
+    selectors return up to ``limit`` rows ordered newest-first. Returns ``None``
+    when ``db`` is not a PostgreSQL client.
+    """
+    import psycopg2
+    import psycopg2.extras
+
+    conn_params = _pg_conn_params(db)
+    if conn_params is None:
+        return None
+
+    bounded_limit = clamp_read_limit(limit)
+
+    base = f"SELECT {_TELEMETRY_READ_COLUMNS} FROM knowledge.retrieval_telemetry"
+    if query_id is not None:
+        sql = f"{base} WHERE query_id = %s"
+        params: tuple = (query_id,)
+    elif session_id is not None:
+        sql = f"{base} WHERE session_id = %s ORDER BY created_at DESC LIMIT %s"
+        params = (session_id, bounded_limit)
+    elif topic is not None:
+        sql = f"{base} WHERE topic = %s ORDER BY created_at DESC LIMIT %s"
+        params = (topic, bounded_limit)
+    else:
+        sql = f"{base} ORDER BY created_at DESC LIMIT %s"
+        params = (bounded_limit,)
+
+    conn = psycopg2.connect(**conn_params)
+    conn.autocommit = True
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def fetch_telemetry_stats(
+    *,
+    session_id: str | None,
+    topic: str | None,
+    db: Any,
+) -> dict | None:
+    """Aggregate telemetry counts/averages, optionally scoped by session/topic.
+
+    Both filters are optional and AND-combined; a ``None`` filter matches every
+    row (``%(x)s IS NULL OR col = %(x)s``). Returns a single stats dict (the
+    ``oldest``/``newest`` timestamps serialise via server.json_serializer), or
+    ``None`` when ``db`` is not a PostgreSQL client.
+    """
+    import psycopg2
+    import psycopg2.extras
+
+    conn_params = _pg_conn_params(db)
+    if conn_params is None:
+        return None
+
+    conn = psycopg2.connect(**conn_params)
+    conn.autocommit = True
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)                                 AS total,
+                       COUNT(user_feedback_score)               AS with_feedback,
+                       COUNT(*) FILTER (WHERE required_requery)  AS requeries,
+                       COUNT(notes)                             AS with_notes,
+                       AVG(user_feedback_score)::float           AS avg_feedback_score,
+                       MIN(created_at)                          AS oldest,
+                       MAX(created_at)                          AS newest
+                  FROM knowledge.retrieval_telemetry
+                 WHERE (%(session_id)s IS NULL OR session_id = %(session_id)s)
+                   AND (%(topic)s      IS NULL OR topic      = %(topic)s)
+                """,
+                {"session_id": session_id, "topic": topic},
+            )
+            return dict(cur.fetchone())
+    finally:
+        conn.close()
