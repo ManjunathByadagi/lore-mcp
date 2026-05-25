@@ -794,10 +794,10 @@ _TOOL_DEFINITIONS = [
         name="log_retrieval_feedback",
         description=(
             "Score or annotate a prior kb_search result by its query_id "
-            "(retrieval telemetry, issue #5). Supply user_feedback_score, notes, "
-            "or both; an omitted field is left unchanged (cannot be reset to "
-            "null). No effect unless LORE_HARD_NEGATIVE_MINING=true on a "
-            "PostgreSQL backend."
+            "(retrieval telemetry, issue #5). Supply user_feedback_score, "
+            "required_requery, notes, or any combination; an omitted field is "
+            "left unchanged (cannot be reset to null). No effect unless "
+            "LORE_HARD_NEGATIVE_MINING=true on a PostgreSQL backend."
         ),
         inputSchema={
             "type": "object",
@@ -811,6 +811,14 @@ _TOOL_DEFINITIONS = [
                     "description": (
                         "Integer relevance/quality score for the retrieval. "
                         "Optional; omit to leave unchanged."
+                    ),
+                },
+                "required_requery": {
+                    "type": "boolean",
+                    "description": (
+                        "True if the user had to refine/repeat their query "
+                        "because the results were insufficient. Optional; omit "
+                        "to leave unchanged."
                     ),
                 },
                 "notes": {
@@ -1783,13 +1791,18 @@ def handle_log_retrieval_feedback(
     query_id: str,
     user_feedback_score: int = None,
     notes: str = None,
+    required_requery: bool = None,
 ) -> dict:
     """Score / annotate a prior kb_search result by its ``query_id``.
 
-    Partial update: supply ``user_feedback_score``, ``notes``, or both; an
-    omitted field is left unchanged (cannot be reset to NULL). When both are
-    ``None`` this is a no-op (no DB round-trip). Returns NOT_FOUND when the
-    ``query_id`` does not exist.
+    Partial update: supply ``user_feedback_score``, ``required_requery``,
+    ``notes``, or any combination; an omitted field is left unchanged (cannot be
+    reset to NULL). When all are ``None`` this is a no-op (no DB round-trip).
+    Returns NOT_FOUND when the ``query_id`` does not exist.
+
+    ``required_requery`` (BUG-3) flags that the user had to refine/repeat the
+    query because the results were insufficient. MCP clients may send it as a
+    string ("true"/"false"/"1"); it is coerced to a bool here.
     """
     try:
         if not telemetry.mining_enabled():
@@ -1798,8 +1811,12 @@ def handle_log_retrieval_feedback(
                 {"skipped": True, "query_id": query_id},
             )
 
+        # MCP clients may send booleans as strings; coerce to a real bool/None.
+        if isinstance(required_requery, str):
+            required_requery = required_requery.strip().lower() in ("true", "1", "yes")
+
         # Early no-op: nothing to update, so skip the vacuous COALESCE round-trip.
-        if user_feedback_score is None and notes is None:
+        if user_feedback_score is None and notes is None and required_requery is None:
             return ResponseEnvelope.success(
                 "No feedback fields supplied; nothing to update",
                 {"noop": True, "query_id": query_id},
@@ -1808,6 +1825,7 @@ def handle_log_retrieval_feedback(
         rows_affected = telemetry.update_retrieval_feedback(
             query_id=query_id,
             user_feedback_score=user_feedback_score,
+            required_requery=required_requery,
             notes=notes,
             db=db,
         )

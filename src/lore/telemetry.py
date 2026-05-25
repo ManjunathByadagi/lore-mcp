@@ -202,6 +202,12 @@ def _pg_conn_params(db: Any) -> dict | None:
         "dbname": db.database,
         "user": db.user,
         "password": db.password,
+        # BUG-2: force UTF8 client encoding so non-ASCII text (em-dash, emoji)
+        # in writes never trips an 'ascii' codec error when the server default
+        # is SQL_ASCII. All callers that build conn params via this helper —
+        # update_retrieval_feedback, backfill_query_embeddings, refresh_*, and
+        # the read helpers — inherit it automatically.
+        "options": "-c client_encoding=UTF8",
     }
 
 
@@ -242,6 +248,10 @@ def write_retrieval_telemetry_async(
         "dbname": db.database,
         "user": db.user,
         "password": db.password,
+        # BUG-2: request UTF8 at connect time (mirrors _pg_conn_params). The
+        # async write path also calls set_client_encoding defensively, but
+        # setting it here means the encoding is correct from the first byte.
+        "options": "-c client_encoding=UTF8",
     }
 
     thread = threading.Thread(
@@ -381,13 +391,18 @@ def update_retrieval_feedback(
     user_feedback_score: int | None,
     notes: str | None,
     db: Any,
+    required_requery: bool | None = None,
 ) -> int | None:
     """Apply caller feedback to one telemetry row; return rows affected.
 
     Partial update via COALESCE: a ``None`` argument leaves that column
-    unchanged (so the caller may set the score, the notes, or both). A
-    consequence — documented as a limitation — is that neither field can be
-    *reset* to NULL through this path.
+    unchanged (so the caller may set the score, the requery flag, the notes, or
+    any combination). A consequence — documented as a limitation — is that no
+    field can be *reset* to NULL through this path.
+
+    ``required_requery`` (BUG-3) records that the user had to refine/repeat the
+    query because the results were insufficient; it feeds the behavioral
+    hard-negative signal.
 
     ``notes`` is defensively truncated to ``MAX_NOTES_LEN`` before storage.
     Returns ``cursor.rowcount`` (0 when ``query_id`` is unknown), or ``None``
@@ -402,6 +417,8 @@ def update_retrieval_feedback(
     if notes is not None and len(notes) > MAX_NOTES_LEN:
         notes = notes[:MAX_NOTES_LEN]
 
+    requery_value = None if required_requery is None else bool(required_requery)
+
     conn = None
     try:
         conn = psycopg2.connect(**conn_params)
@@ -411,10 +428,11 @@ def update_retrieval_feedback(
                 """
                 UPDATE knowledge.retrieval_telemetry
                    SET user_feedback_score = COALESCE(%s, user_feedback_score),
+                       required_requery    = COALESCE(%s, required_requery),
                        notes               = COALESCE(%s, notes)
                  WHERE query_id = %s
                 """,
-                (user_feedback_score, notes, query_id),
+                (user_feedback_score, requery_value, notes, query_id),
             )
             return cur.rowcount
     finally:

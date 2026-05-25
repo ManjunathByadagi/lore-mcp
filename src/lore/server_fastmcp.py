@@ -514,21 +514,24 @@ def cluster_results(
 @mcp.tool(
     description=(
         "Score or annotate a prior kb_search result by its query_id "
-        "(retrieval telemetry, issue #5). Supply user_feedback_score, notes, or "
-        "both; an omitted field is left unchanged (cannot be reset to null). No "
-        "effect unless LORE_HARD_NEGATIVE_MINING=true on a PostgreSQL backend."
+        "(retrieval telemetry, issue #5). Supply user_feedback_score, "
+        "required_requery, notes, or any combination; an omitted field is left "
+        "unchanged (cannot be reset to null). No effect unless "
+        "LORE_HARD_NEGATIVE_MINING=true on a PostgreSQL backend."
     )
 )
 def log_retrieval_feedback(
     query_id: str,
     user_feedback_score: int | None = None,
     notes: str | None = None,
+    required_requery: bool | None = None,
 ) -> str:
     return _json(
         _srv.handle_log_retrieval_feedback(
             query_id=query_id,
             user_feedback_score=user_feedback_score,
             notes=notes,
+            required_requery=required_requery,
         )
     )
 

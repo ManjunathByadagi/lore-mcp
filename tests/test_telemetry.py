@@ -489,11 +489,12 @@ def test_update_feedback_truncates_notes(monkeypatch, pg_db):
         query_id="qry_abc", user_feedback_score=None, notes=long_notes, db=pg_db
     )
     assert rc == 1
-    # Second positional param is the (truncated) notes value.
+    # Param order: (user_feedback_score, required_requery, notes, query_id).
     _sql, params = cur.executed[0]
-    assert len(params[1]) == telemetry.MAX_NOTES_LEN
+    assert len(params[2]) == telemetry.MAX_NOTES_LEN  # notes truncated
     assert params[0] is None  # score left untouched
-    assert params[2] == "qry_abc"
+    assert params[1] is None  # required_requery left untouched
+    assert params[3] == "qry_abc"
 
 
 def test_update_feedback_returns_rowcount_zero_when_not_found(monkeypatch, pg_db):
@@ -574,7 +575,7 @@ def test_fetch_telemetry_all_none_branch(monkeypatch, pg_db):
 
 
 def test_update_feedback_score_only(monkeypatch, pg_db):
-    """COALESCE partial update with score only leaves notes param as None."""
+    """COALESCE partial update with score only leaves the other params as None."""
     cur = _FakeRWCursor(rowcount=1)
     _patch_connect(monkeypatch, _FakeConn(cur))
     rc = telemetry.update_retrieval_feedback(
@@ -582,7 +583,54 @@ def test_update_feedback_score_only(monkeypatch, pg_db):
     )
     assert rc == 1
     _sql, params = cur.executed[0]
-    assert params == (3, None, "qry_x")
+    # Param order: (user_feedback_score, required_requery, notes, query_id).
+    assert params == (3, None, None, "qry_x")
+
+
+def test_update_feedback_accepts_unicode_notes(monkeypatch, pg_db):
+    """BUG-2: notes containing non-ASCII (em-dash, emoji) must not raise.
+
+    The fix routes all fresh connections through conn params that request UTF8
+    (`options=-c client_encoding=UTF8`), so the str->bytes adaptation never hits
+    an 'ascii' codec error. Here the cursor execute is mocked, so we only assert
+    the call does not raise and the unicode note is passed through verbatim.
+    """
+    cur = _FakeRWCursor(rowcount=1)
+    _patch_connect(monkeypatch, _FakeConn(cur))
+    note = "Deployment monitoring — good signal 🔍"
+    rc = telemetry.update_retrieval_feedback(
+        query_id="qry_uni", user_feedback_score=None, notes=note, db=pg_db
+    )
+    assert rc == 1
+    _sql, params = cur.executed[0]
+    # notes is the 3rd COALESCE param; passed through unchanged (under MAX_NOTES_LEN).
+    assert params[2] == note
+
+
+def test_update_feedback_sets_required_requery(monkeypatch, pg_db):
+    """BUG-3: required_requery is accepted and threaded into the UPDATE."""
+    cur = _FakeRWCursor(rowcount=1)
+    _patch_connect(monkeypatch, _FakeConn(cur))
+    rc = telemetry.update_retrieval_feedback(
+        query_id="qry_rq",
+        user_feedback_score=None,
+        required_requery=True,
+        notes=None,
+        db=pg_db,
+    )
+    assert rc == 1
+    sql, params = cur.executed[0]
+    # Whitespace-insensitive: the SQL aligns columns with padding.
+    assert "required_requery = COALESCE(%s, required_requery)" in " ".join(sql.split())
+    # Param order: (user_feedback_score, required_requery, notes, query_id).
+    assert params == (None, True, None, "qry_rq")
+
+
+def test_pg_conn_params_requests_utf8_encoding(pg_db):
+    """BUG-2: _pg_conn_params must request UTF8 so every caller inherits it."""
+    params = telemetry._pg_conn_params(pg_db)
+    assert params is not None
+    assert params.get("options") == "-c client_encoding=UTF8"
 
 
 def test_write_row_swallows_execute_error(caplog):
@@ -694,6 +742,59 @@ def test_log_feedback_success(monkeypatch):
     assert resp["ok"] is True
     assert resp["data"]["updated"] == 1
     assert resp["data"]["query_id"] == "qry_ok"
+
+
+def test_log_feedback_threads_required_requery(monkeypatch):
+    """BUG-3: handler forwards required_requery to update_retrieval_feedback."""
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return 1
+
+    monkeypatch.setattr(srv.telemetry, "update_retrieval_feedback", _spy)
+    resp = srv.handle_log_retrieval_feedback("qry_rq", required_requery=True)
+    assert resp["ok"] is True
+    assert captured["required_requery"] is True
+
+
+def test_log_feedback_coerces_string_required_requery(monkeypatch):
+    """BUG-3: MCP clients may send 'true'/'false' strings; handler coerces to bool."""
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return 1
+
+    monkeypatch.setattr(srv.telemetry, "update_retrieval_feedback", _spy)
+    srv.handle_log_retrieval_feedback("qry_rq", required_requery="true")
+    assert captured["required_requery"] is True
+    srv.handle_log_retrieval_feedback("qry_rq", required_requery="false")
+    assert captured["required_requery"] is False
+
+
+def test_log_feedback_requery_only_is_not_noop(monkeypatch):
+    """required_requery alone (no score/notes) must trigger a DB round-trip."""
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    called = {"n": 0}
+
+    def _spy(**_k):
+        called["n"] += 1
+        return 1
+
+    monkeypatch.setattr(srv.telemetry, "update_retrieval_feedback", _spy)
+    resp = srv.handle_log_retrieval_feedback("qry_rq", required_requery=True)
+    assert resp["ok"] is True
+    assert resp["data"].get("noop") is not True
+    assert called["n"] == 1
 
 
 def test_log_feedback_backend_unavailable_returns_error(monkeypatch):
