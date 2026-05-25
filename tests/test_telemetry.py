@@ -602,6 +602,23 @@ def test_log_feedback_success(monkeypatch):
     assert resp["data"]["query_id"] == "qry_ok"
 
 
+def test_log_feedback_backend_unavailable_returns_error(monkeypatch):
+    """When update_retrieval_feedback returns None (non-PG backend), the handler
+    returns an UNEXPECTED_EXCEPTION error, not a false-success.
+
+    Regression guard for Fix 1 (commit f01a1c2): None == 0 is False, so a single
+    rowcount check would let None fall through to {updated: None}. The explicit
+    `rows_affected is None` branch must short-circuit to an error first.
+    """
+    import lore.server as srv
+
+    _enable_mining(monkeypatch)
+    monkeypatch.setattr(srv.telemetry, "update_retrieval_feedback", lambda **_k: None)
+    resp = srv.handle_log_retrieval_feedback("qry_x", user_feedback_score=3)
+    assert resp["ok"] is False
+    assert resp["error"] == "unexpected_exception"
+
+
 # ---------------------------------------------------------------------------
 # Handler: handle_get_retrieval_telemetry / handle_get_telemetry_stats
 # ---------------------------------------------------------------------------
