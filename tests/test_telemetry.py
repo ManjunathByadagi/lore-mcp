@@ -1199,21 +1199,21 @@ def test_get_hard_negatives_all_maps_to_none_filter(monkeypatch):
 @pytest.mark.parametrize(
     "given,expected",
     [
-        (-3, 1),       # truthy but below 1 -> floored to 1
+        (-3, 1),       # below 1 -> floored to 1
         (1, 1),        # exact lower bound passes through
         (1001, 1000),  # above MAX_HN_LIMIT -> clamped
         (9999, 1000),  # well above ceiling -> clamped
-        (None, 100),   # falsy -> DEFAULT_HN_LIMIT
-        (0, 100),      # 0 is falsy -> DEFAULT_HN_LIMIT (handler uses `if limit`)
+        (None, 100),   # None -> DEFAULT_HN_LIMIT
+        (0, 1),        # BUG-9: 0 is now clamped to 1 (explicit None check)
         (50, 50),
     ],
 )
 def test_get_hard_negatives_limit_clamping(monkeypatch, given, expected):
-    """Limit is clamped to [1, MAX_HN_LIMIT]; falsy (None/0) falls back to default.
+    """Limit is clamped to [1, MAX_HN_LIMIT]; None falls back to default.
 
-    Note: the handler's `int(limit) if limit else DEFAULT_HN_LIMIT` treats 0 as
-    falsy, so limit=0 yields the default (100), not the floor (1). A negative
-    limit is truthy and is floored to 1 by the surrounding max(1, ...).
+    BUG-9 fix: limit=0 is now clamped to 1 (not 100). The handler uses an
+    explicit ``if limit is None`` check so 0 is treated as a real value and
+    floored by max(1, ...) rather than silently replaced by DEFAULT_HN_LIMIT.
     """
     import lore.server as srv
 

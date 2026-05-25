@@ -114,8 +114,14 @@ def test_kb_update_metadata_param_removed_from_schema():
 
 def test_kb_update_metadata_rejected_at_call_tool_boundary():
     """End-to-end BUG-1: a kb_update call carrying `metadata` is rejected as a
-    clean invalid_input at the MCP boundary (additionalProperties:false), never
-    raising an exception that leaks as unexpected_exception."""
+    clean invalid_input at the handler level (**kwargs check), never raising an
+    exception that leaks as unexpected_exception.
+
+    Note: additionalProperties:False was removed from the schema because FastMCP
+    intercepts schema rejections before call_tool executes, producing a raw
+    -32603 transport error instead of our clean envelope. The handler's **kwargs
+    check catches unsupported fields and returns the clean invalid_input envelope.
+    """
     import asyncio
     import json
 

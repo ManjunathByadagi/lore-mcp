@@ -362,10 +362,6 @@ _TOOL_DEFINITIONS = [
                 },
             },
             "required": ["kb_id"],
-            # BUG-1: reject unknown fields (e.g. the removed `metadata`) at the
-            # MCP boundary so they surface as a clean invalid_input validation
-            # error instead of a TypeError leaked as unexpected_exception.
-            "additionalProperties": False,
         },
     ),
     types.Tool(
@@ -1960,11 +1956,15 @@ def handle_refresh_hard_negatives(since=None, dry_run=False):
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_get_hard_negatives(signal_type=None, limit=100, doc_id=None, query_text_like=None):
+def handle_get_hard_negatives(signal_type=None, limit=None, doc_id=None, query_text_like=None):
     try:
         # Note: get_hard_negatives does NOT gate on mining_enabled() —
         # it reads historical pairs even when mining is currently off
-        limit = max(1, min(telemetry.MAX_HN_LIMIT, int(limit) if limit else telemetry.DEFAULT_HN_LIMIT))
+        # BUG-9: use explicit None check so limit=0 is clamped to 1 rather than
+        # falling back to DEFAULT_HN_LIMIT (0 is falsy; `0 or default` gave 100).
+        if limit is None:
+            limit = telemetry.DEFAULT_HN_LIMIT
+        limit = max(1, min(telemetry.MAX_HN_LIMIT, int(limit)))
         if signal_type and signal_type not in ("explicit", "behavioral", "all"):
             return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT,
                 "signal_type must be 'explicit', 'behavioral', or 'all'")
@@ -2063,6 +2063,7 @@ def handle_kb_update(
     topic: str = None,
     verified: Any = _VERIFIED_SENTINEL,
     entry_id: str = None,
+    **kwargs,
 ) -> dict:
     """Update existing KB entry with partial updates support.
 
@@ -2076,6 +2077,17 @@ def handle_kb_update(
     unreviewed). Omit the argument entirely to leave the verified state unchanged.
     """
     import psycopg2
+
+    # BUG-1: catch unsupported fields (e.g. the removed `metadata`) at the
+    # handler level and return a clean invalid_input envelope. Using **kwargs
+    # rather than additionalProperties:False in the schema avoids FastMCP
+    # rejecting the request at the transport layer (which produces -32603).
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            f"Unsupported field(s): {unsupported}. Use title, content, topic, tags, or verified.",
+        )
 
     # BUG-3: accept kb_id as the primary param name; fall back to entry_id.
     entry_id = kb_id or entry_id
