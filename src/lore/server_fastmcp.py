@@ -148,7 +148,7 @@ mcp: FastMCP = FastMCP("knowledge-mcp", version="0.6.0", lifespan=lore_lifespan)
 
 
 # ===========================================================================
-# Tool wrappers (34). Each accepts typed params, coerces Claude Code quirks,
+# Tool wrappers (36). Each accepts typed params, coerces Claude Code quirks,
 # calls the verbatim handler, and returns a JSON string. Descriptions are
 # copied from lore.server._TOOL_DEFINITIONS to keep parity.
 # ===========================================================================
@@ -564,6 +564,35 @@ def get_retrieval_telemetry(
 )
 def get_telemetry_stats(session_id: str | None = None, topic: str | None = None) -> str:
     return _json(_srv.handle_get_telemetry_stats(session_id=session_id, topic=topic))
+
+
+# --- Hard Negative Mining (Issue #5 Phase 3) (2) ---------------------------
+
+
+@mcp.tool(description=(
+    "Scan retrieval_telemetry for low-scored and requery signals, then upsert "
+    "hard negative pairs into knowledge.hard_negative_pairs. Use since= for "
+    "incremental refresh. dry_run=true returns counts without writing. "
+    "Requires LORE_HARD_NEGATIVE_MINING=true."
+))
+def refresh_hard_negatives(since: str | None = None, dry_run: bool = False) -> str:
+    return _json(_srv.handle_refresh_hard_negatives(since=since, dry_run=dry_run))
+
+
+@mcp.tool(description=(
+    "Read hard negative (query, document) pairs from knowledge.hard_negative_pairs. "
+    "Filter by signal_type (explicit/behavioral/all), doc_id, or query_text_like. "
+    "Returns pairs sorted by occurrence_count DESC."
+))
+def get_hard_negatives(
+    signal_type: str | None = None,
+    limit: int = 100,
+    doc_id: str | None = None,
+    query_text_like: str | None = None,
+) -> str:
+    return _json(_srv.handle_get_hard_negatives(
+        signal_type=signal_type, limit=limit,
+        doc_id=doc_id, query_text_like=query_text_like))
 
 
 # ===========================================================================

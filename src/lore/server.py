@@ -879,6 +879,72 @@ _TOOL_DEFINITIONS = [
             },
         },
     ),
+    # Hard Negative Mining Tools (Issue #5 Phase 3) (2)
+    types.Tool(
+        name="refresh_hard_negatives",
+        description=(
+            "Scan retrieval_telemetry for low-scored and requery signals, then "
+            "upsert hard negative (query, document) pairs into "
+            "knowledge.hard_negative_pairs (issue #5). Use since= (ISO timestamp) "
+            "for an incremental refresh; dry_run=true returns counts without "
+            "writing. Requires LORE_HARD_NEGATIVE_MINING=true on a PostgreSQL "
+            "backend."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "since": {
+                    "type": "string",
+                    "description": (
+                        "ISO timestamp; only mine telemetry created after this. "
+                        "Omit for a full refresh."
+                    ),
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Return counts without persisting any pairs.",
+                },
+            },
+        },
+    ),
+    types.Tool(
+        name="get_hard_negatives",
+        description=(
+            "Read hard negative (query, document) pairs from "
+            "knowledge.hard_negative_pairs (issue #5). Filter by signal_type "
+            "(explicit/behavioral/all), doc_id, or query_text_like. Returns pairs "
+            "sorted by occurrence_count DESC."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "signal_type": {
+                    "type": "string",
+                    "enum": ["explicit", "behavioral", "all"],
+                    "description": (
+                        "Filter by signal type: 'explicit' (low feedback score), "
+                        "'behavioral' (required requery), or 'all'. Optional."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 100,
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "Max pairs to return (default 100, clamped to 1000).",
+                },
+                "doc_id": {
+                    "type": "string",
+                    "description": "Restrict to pairs for this kb_id (optional).",
+                },
+                "query_text_like": {
+                    "type": "string",
+                    "description": "Case-insensitive substring match on query_text (optional).",
+                },
+            },
+        },
+    ),
 ]
 
 
@@ -1002,6 +1068,12 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
             return format_response(handle_get_retrieval_telemetry(**arguments))
         elif name == "get_telemetry_stats":
             return format_response(handle_get_telemetry_stats(**arguments))
+
+        # Hard Negative Mining Tools (Issue #5 Phase 3)
+        elif name == "refresh_hard_negatives":
+            return format_response(handle_refresh_hard_negatives(**arguments))
+        elif name == "get_hard_negatives":
+            return format_response(handle_get_hard_negatives(**arguments))
 
         else:
             return format_response(
@@ -1730,6 +1802,55 @@ def handle_get_telemetry_stats(session_id: str = None, topic: str = None) -> dic
         return ResponseEnvelope.success("Telemetry stats", {"stats": stats})
     except Exception as e:
         logger.error(f"Error fetching telemetry stats: {e}")
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+# =============================================================================
+# Hard Negative Mining Handlers (Issue #5, Phase 3)
+#
+# refresh gates on mining_enabled() (write path); get does NOT (it reads
+# historical pairs even when mining is currently off). Both delegate to
+# telemetry.py, which opens a fresh connection per call and returns None for a
+# non-PostgreSQL backend.
+# =============================================================================
+
+
+def handle_refresh_hard_negatives(since=None, dry_run=False):
+    try:
+        if not telemetry.mining_enabled():
+            return ResponseEnvelope.success(
+                "Hard negative mining disabled; no refresh performed",
+                {"skipped": True, "reason": "mining_disabled"}
+            )
+        result = telemetry.refresh_hard_negative_pairs(since=since, dry_run=bool(dry_run), db=db)
+        if result is None:
+            return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable")
+        msg = f"{'[dry-run] ' if dry_run else ''}Processed {result['processed_telemetry_rows']} telemetry rows"
+        return ResponseEnvelope.success(msg, result)
+    except Exception as e:
+        logger.error(f"Error refreshing hard negatives: {e}")
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+def handle_get_hard_negatives(signal_type=None, limit=100, doc_id=None, query_text_like=None):
+    try:
+        # Note: get_hard_negatives does NOT gate on mining_enabled() —
+        # it reads historical pairs even when mining is currently off
+        limit = max(1, min(telemetry.MAX_HN_LIMIT, int(limit) if limit else telemetry.DEFAULT_HN_LIMIT))
+        if signal_type and signal_type not in ("explicit", "behavioral", "all"):
+            return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT,
+                "signal_type must be 'explicit', 'behavioral', or 'all'")
+        effective_signal = None if signal_type == "all" else signal_type
+        pairs = telemetry.fetch_hard_negatives(
+            signal_type=effective_signal, limit=limit,
+            doc_id=doc_id, query_text_like=query_text_like, db=db)
+        if pairs is None:
+            return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable")
+        return ResponseEnvelope.success(
+            f"Found {len(pairs)} hard negative pair(s)",
+            {"pairs": pairs, "count": len(pairs)})
+    except Exception as e:
+        logger.error(f"Error fetching hard negatives: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 

@@ -18,6 +18,7 @@ Design constraints (deliberately minimal for Phase 1):
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
@@ -91,6 +92,36 @@ MAX_READ_LIMIT = 500
 DEFAULT_READ_LIMIT = 50
 
 
+# Phase 3 (Issue #5): DDL for the hard_negative_pairs table + indexes. Kept
+# byte-for-byte identical to the SQL body of migrations/007_hard_negative_pairs.sql
+# (verified by a unit test). ON DELETE RESTRICT — pairs are training signal, not
+# disposable cache; a KB entry deletion is blocked until its pairs are cleared.
+HARD_NEGATIVE_PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS knowledge.hard_negative_pairs (
+    pair_id          TEXT PRIMARY KEY,
+    query_text       TEXT NOT NULL,
+    doc_id           TEXT NOT NULL REFERENCES knowledge.kb_entries(kb_id) ON DELETE RESTRICT,
+    signal_type      TEXT NOT NULL CHECK (signal_type IN ('explicit', 'behavioral')),
+    source_query_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    first_seen_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hn_pairs_query_doc
+    ON knowledge.hard_negative_pairs (query_text, doc_id);
+CREATE INDEX IF NOT EXISTS idx_hn_pairs_doc_id
+    ON knowledge.hard_negative_pairs (doc_id);
+CREATE INDEX IF NOT EXISTS idx_hn_pairs_signal
+    ON knowledge.hard_negative_pairs (signal_type);
+CREATE INDEX IF NOT EXISTS idx_hn_pairs_last_seen
+    ON knowledge.hard_negative_pairs (last_seen_at);
+"""
+
+# Phase 3 read bounds: hard ceiling + default for get_hard_negatives.
+MAX_HN_LIMIT = 1000
+DEFAULT_HN_LIMIT = 100
+
+
 def ensure_telemetry_schema(conn) -> None:
     """Create the retrieval_telemetry table + indexes (+ notes column) if absent.
 
@@ -110,6 +141,27 @@ def ensure_telemetry_schema(conn) -> None:
         statements.append(TELEMETRY_NOTES_DDL.rstrip(";").strip())
         for stmt in statements:
             cursor.execute(stmt)
+    finally:
+        cursor.close()
+
+
+def ensure_hard_negative_schema(conn) -> None:
+    """Create the hard_negative_pairs table + indexes if absent (Phase 3).
+
+    Mirrors ``ensure_telemetry_schema``: psycopg2 runs only the first statement
+    of a multi-statement string, so split on ';' and execute each non-empty
+    statement individually (otherwise the 4 index statements are silently
+    dropped on a fresh database). Idempotent (CREATE ... IF NOT EXISTS). Wrapped
+    in try/except by the caller (db_client) so a failure here can never disturb
+    schema initialisation; we additionally swallow + warn here defensively.
+    """
+    cursor = conn.cursor()
+    try:
+        statements = [s.strip() for s in HARD_NEGATIVE_PG_SCHEMA.split(";") if s.strip()]
+        for stmt in statements:
+            cursor.execute(stmt)
+    except Exception as exc:  # noqa: BLE001 — schema init is best-effort
+        logger.warning("ensure_hard_negative_schema failed: %s", exc)
     finally:
         cursor.close()
 
@@ -437,5 +489,221 @@ def fetch_telemetry_stats(
                 "with_notes": 0, "avg_feedback_score": None,
                 "oldest": None, "newest": None
             }
+    finally:
+        conn.close()
+
+
+# ===========================================================================
+# Phase 3 (Issue #5): hard negative mining — derive (query, doc) pairs from
+# telemetry and upsert them into knowledge.hard_negative_pairs, plus a read
+# helper. Both run on the request thread and open a *fresh* connection (via
+# _pg_conn_params); both return ``None`` for a non-PostgreSQL backend.
+# ===========================================================================
+
+# Two source queries over retrieval_telemetry. Each unrolls the JSONB
+# retrieved_document_ids array into one row per doc_id and tags it with a
+# signal type. The optional ``{since}`` clause is interpolated (not a bind
+# param) only when ``since`` is non-None; the value itself is always passed
+# as a %(since)s bind parameter to keep it parameterized.
+_HN_EXPLICIT_SQL = """
+SELECT query_id, query_text,
+       jsonb_array_elements_text(retrieved_document_ids) AS doc_id
+  FROM knowledge.retrieval_telemetry
+ WHERE user_feedback_score <= 2
+   AND result_count > 0
+   {since}
+"""
+
+_HN_BEHAVIORAL_SQL = """
+SELECT query_id, query_text,
+       jsonb_array_elements_text(retrieved_document_ids) AS doc_id
+  FROM knowledge.retrieval_telemetry
+ WHERE required_requery = TRUE
+   AND result_count > 0
+   AND user_feedback_score IS NULL
+   {since}
+"""
+
+_HN_UPSERT_SQL = """
+INSERT INTO knowledge.hard_negative_pairs
+    (pair_id, query_text, doc_id, signal_type, source_query_ids,
+     occurrence_count, first_seen_at, last_seen_at)
+VALUES (%s, %s, %s, %s, %s::jsonb, 1, NOW(), NOW())
+ON CONFLICT (pair_id) DO UPDATE SET
+    occurrence_count = knowledge.hard_negative_pairs.occurrence_count + 1,
+    last_seen_at     = NOW(),
+    source_query_ids = (
+        SELECT jsonb_agg(DISTINCT v)
+        FROM jsonb_array_elements_text(
+            knowledge.hard_negative_pairs.source_query_ids || EXCLUDED.source_query_ids
+        ) t(v)
+    )
+"""
+
+
+def hard_negative_pair_id(query_text: str, doc_id: str) -> str:
+    """Deterministic 32-hex pair id derived from (query_text, doc_id).
+
+    Using SHA-256 (not a random token) makes the primary key stable across
+    refresh runs, so ``ON CONFLICT (pair_id) DO UPDATE`` fires on every re-run
+    instead of inserting duplicates.
+    """
+    return hashlib.sha256(f"{query_text}:{doc_id}".encode()).hexdigest()[:32]
+
+
+def refresh_hard_negative_pairs(
+    *,
+    since: str | None,
+    dry_run: bool,
+    db: Any,
+) -> dict | None:
+    """Scan telemetry, derive hard negative pairs, and upsert them.
+
+    ``since`` is an ISO timestamp string (or ``None`` for a full refresh); when
+    set, only telemetry rows with ``created_at > since::timestamptz`` are mined.
+    Each ``(query_text, doc_id)`` becomes a deterministic ``pair_id`` and is
+    batch-upserted (occurrence_count++ and source_query_ids deduped on conflict).
+
+    ``dry_run`` runs the full upsert inside a transaction and ROLLBACKs at the
+    end — the returned counts reflect what *would* change, but nothing persists.
+
+    Returns a summary dict, or ``None`` when ``db`` is not a PostgreSQL client.
+    """
+    import json
+
+    import psycopg2
+
+    conn_params = _pg_conn_params(db)
+    if conn_params is None:
+        return None
+
+    explicit_sql = _HN_EXPLICIT_SQL.format(
+        since="AND created_at > %(since)s::timestamptz" if since else ""
+    )
+    behavioral_sql = _HN_BEHAVIORAL_SQL.format(
+        since="AND created_at > %(since)s::timestamptz" if since else ""
+    )
+
+    conn = psycopg2.connect(**conn_params)
+    conn.set_client_encoding("UTF8")
+    # Transactional (not autocommit) so dry_run can ROLLBACK the whole batch.
+    conn.autocommit = False
+    try:
+        # Count existing pairs first so we can derive inserted vs updated even
+        # under a dry-run rollback (occurrence_count deltas aren't surfaced).
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM knowledge.hard_negative_pairs")
+            total_before = cur.fetchone()[0]
+
+        # One upsert param tuple per (query_text, doc_id) telemetry row. The
+        # pair_id is the deterministic SHA-256 of (query_text, doc_id) so that
+        # ON CONFLICT fires across refreshes; source_query_ids is seeded with the
+        # originating telemetry query_id and deduped on conflict.
+        upsert_params: list[tuple] = []
+        with conn.cursor() as cur:
+            cur.execute(explicit_sql, {"since": since})
+            explicit_rows = cur.fetchall()
+            cur.execute(behavioral_sql, {"since": since})
+            behavioral_rows = cur.fetchall()
+
+        for query_id, query_text, doc_id in explicit_rows:
+            upsert_params.append((
+                hard_negative_pair_id(query_text, doc_id),
+                query_text, doc_id, "explicit", json.dumps([query_id]),
+            ))
+        for query_id, query_text, doc_id in behavioral_rows:
+            upsert_params.append((
+                hard_negative_pair_id(query_text, doc_id),
+                query_text, doc_id, "behavioral", json.dumps([query_id]),
+            ))
+
+        processed = len(explicit_rows) + len(behavioral_rows)
+
+        if upsert_params:
+            with conn.cursor() as cur:
+                cur.executemany(_HN_UPSERT_SQL, upsert_params)
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM knowledge.hard_negative_pairs")
+            total_after = cur.fetchone()[0]
+
+        inserted = total_after - total_before
+        updated = len(upsert_params) - inserted
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+
+        return {
+            "inserted": inserted,
+            "updated": max(updated, 0),
+            "total_pairs": total_after,
+            "processed_telemetry_rows": processed,
+            "since": since or "all",
+            "dry_run": dry_run,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# Columns returned by fetch_hard_negatives, in a stable order. The TIMESTAMPTZ
+# columns serialise via server.json_serializer — no extra handling here.
+_HN_READ_COLUMNS = (
+    "pair_id, query_text, doc_id, signal_type, source_query_ids, "
+    "occurrence_count, first_seen_at, last_seen_at"
+)
+
+
+def fetch_hard_negatives(
+    *,
+    signal_type: str | None,
+    limit: int,
+    doc_id: str | None,
+    query_text_like: str | None,
+    db: Any,
+) -> list[dict] | None:
+    """Read hard negative pairs with optional filters, busiest pairs first.
+
+    Filters (all optional, AND-combined): ``signal_type`` (exact),
+    ``doc_id`` (exact), ``query_text_like`` (case-insensitive substring via
+    parameterized ILIKE). Ordered by ``occurrence_count`` then ``last_seen_at``
+    descending, capped at ``limit``. Returns ``None`` for a non-PG backend.
+    """
+    import psycopg2
+    import psycopg2.extras
+
+    conn_params = _pg_conn_params(db)
+    if conn_params is None:
+        return None
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if signal_type is not None:
+        clauses.append("signal_type = %s")
+        params.append(signal_type)
+    if doc_id is not None:
+        clauses.append("doc_id = %s")
+        params.append(doc_id)
+    if query_text_like is not None:
+        clauses.append("query_text ILIKE %s")
+        params.append(f"%{query_text_like}%")
+
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = (
+        f"SELECT {_HN_READ_COLUMNS} FROM knowledge.hard_negative_pairs"
+        f"{where} ORDER BY occurrence_count DESC, last_seen_at DESC LIMIT %s"
+    )
+    params.append(limit)
+
+    conn = psycopg2.connect(**conn_params)
+    conn.autocommit = True
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, tuple(params))
+            return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()

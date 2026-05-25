@@ -271,6 +271,15 @@ class LocalPostgresClient:
             except Exception as e:  # noqa: BLE001
                 logger.warning("Failed to initialize telemetry schema (non-fatal): %s", e)
 
+            # Hard negative pairs schema (Phase 3) — requires mining enabled +
+            # PostgreSQL. Isolated try/except so a failure here can never touch
+            # vec_extension_loaded / _schema_initialized.
+            try:
+                telemetry_module.ensure_hard_negative_schema(self._conn)
+                logger.info("Hard negative pairs schema ready")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("ensure_hard_negative_schema failed: %s", exc)
+
     def table(self, name: str) -> "TableQuery":
         """Start a query on a table (Supabase-compatible interface)."""
         return TableQuery(self, name)
