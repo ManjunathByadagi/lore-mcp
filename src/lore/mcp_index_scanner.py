@@ -20,11 +20,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .response import ErrorCodes
+
 logger = logging.getLogger(__name__)
 
 _NOT_CONFIGURED = {
     "ok": False,
-    "error": "not_configured",
+    "error": ErrorCodes.NOT_CONFIGURED,
     "message": (
         "Set LORE_MCP_SERVERS_PATH to use MCP index tools. "
         "Example: export LORE_MCP_SERVERS_PATH=/path/to/mcp/servers"
@@ -63,6 +65,17 @@ class MCPIndexScanner:
         if self.servers_path is None:
             logger.warning("mcp_index_scan called but LORE_MCP_SERVERS_PATH is not set")
             return _NOT_CONFIGURED
+
+        if not self.servers_path.is_dir():
+            logger.warning(
+                "mcp_index_scan called but LORE_MCP_SERVERS_PATH is not a valid directory: %s",
+                self.servers_path,
+            )
+            return {
+                "ok": False,
+                "error": ErrorCodes.NOT_CONFIGURED,
+                "message": f"LORE_MCP_SERVERS_PATH is not a valid directory: {self.servers_path}",
+            }
 
         start_time = time.time()
         logger.info("Starting MCP index scan...")

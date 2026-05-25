@@ -2957,7 +2957,7 @@ def handle_mcp_index_scan(triggered_by: str = "manual", config_filter: bool = Tr
         scanner = MCPIndexScanner(db)
         result = scanner.scan_all_servers(triggered_by=triggered_by, config_filter=config_filter)
 
-        if result.get("error") == "not_configured":
+        if result.get("error") == ErrorCodes.NOT_CONFIGURED:
             return ResponseEnvelope.error(ErrorCodes.NOT_CONFIGURED, result["message"])
 
         return ResponseEnvelope.success(
@@ -3008,6 +3008,11 @@ def handle_mcp_index_search(query: str, category: str = None, limit: int = 20) -
                             try:
                                 scanner_bg = MCPIndexScanner(db)
                                 result = scanner_bg.scan_all_servers(triggered_by="auto_watchdog")
+                                if result.get("error") == ErrorCodes.NOT_CONFIGURED:
+                                    logger.debug(
+                                        "mcp_index auto-watchdog skipped: LORE_MCP_SERVERS_PATH not configured"
+                                    )
+                                    return
                                 logger.info(
                                     f"Auto re-index complete: {result['servers_scanned']} servers, {result['tools_indexed']} tools"
                                 )
@@ -3029,6 +3034,11 @@ def handle_mcp_index_search(query: str, category: str = None, limit: int = 20) -
                             result = scanner_bg.scan_all_servers(
                                 triggered_by="auto_watchdog_initial"
                             )
+                            if result.get("error") == ErrorCodes.NOT_CONFIGURED:
+                                logger.debug(
+                                    "mcp_index auto-watchdog skipped: LORE_MCP_SERVERS_PATH not configured"
+                                )
+                                return
                             logger.info(
                                 f"Initial auto scan complete: {result['servers_scanned']} servers, {result['tools_indexed']} tools"
                             )
@@ -3104,7 +3114,7 @@ def handle_mcp_index_rebuild() -> dict:
         scanner = MCPIndexScanner(db)
         result = scanner.scan_all_servers(triggered_by="rebuild")
 
-        if result.get("error") == "not_configured":
+        if result.get("error") == ErrorCodes.NOT_CONFIGURED:
             return ResponseEnvelope.error(ErrorCodes.NOT_CONFIGURED, result["message"])
 
         return ResponseEnvelope.success(
