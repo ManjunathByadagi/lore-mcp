@@ -1114,10 +1114,11 @@ def handle_kb_add(
             "topic": topic,
             "title": title,
             "content": content,
-            # kb_entries.tags is a jsonb column — serialize the Python list to a
-            # JSON string so psycopg2 sends '[...]' rather than a PostgreSQL ARRAY
-            # literal '{...}', which raises a jsonb type-mismatch on insert.
-            "tags": json.dumps(tags or []),
+            # kb_entries.tags is a text[] column. Pass the Python list through
+            # raw so the db layer adapts it natively (psycopg2 -> array literal
+            # on Postgres, json string on SQLite). json.dumps() here would send
+            # '[...]' to text[] and raise "malformed array literal".
+            "tags": tags or [],
             "author": author,
             "source_type": source_type,
         }
@@ -1448,10 +1449,10 @@ def handle_kb_update(
                 update_data["metadata"] = metadata
 
         if tags is not None:
-            # kb_entries.tags is a jsonb column — serialize the Python list to a
-            # JSON string so psycopg2 sends '[...]' rather than a PostgreSQL ARRAY
-            # literal '{...}', which raises a jsonb type-mismatch on update.
-            update_data["tags"] = json.dumps(tags)
+            # kb_entries.tags is a text[] column — pass the Python list through
+            # raw (see handle_kb_add). json.dumps() would raise "malformed array
+            # literal" on Postgres.
+            update_data["tags"] = tags
 
         if topic is not None:
             update_data["topic"] = topic
@@ -1846,10 +1847,6 @@ def handle_kb_ingest_doc(
         doc_tags = tags or []
         if "tags" in metadata:
             doc_tags.extend(metadata["tags"])
-        # kb_entries.tags is a jsonb column — serialize the Python list once here
-        # so psycopg2 sends '[...]' rather than a PostgreSQL ARRAY literal '{...}',
-        # which raises a jsonb type-mismatch on insert. Reused by both strategies.
-        doc_tags_json = json.dumps(doc_tags)
 
         # Ingest based on strategy
         kb_ids = []
@@ -1862,7 +1859,7 @@ def handle_kb_ingest_doc(
                 "topic": topic,
                 "title": base_title,
                 "content": content,
-                "tags": doc_tags_json,
+                "tags": doc_tags,
                 "source_doc": str(doc_path),
                 "source_section": None,
                 "line_range": [1, len(content.split("\n"))],
@@ -1887,7 +1884,7 @@ def handle_kb_ingest_doc(
                     "topic": topic,
                     "title": title,
                     "content": chunk.content,
-                    "tags": doc_tags_json,
+                    "tags": doc_tags,
                     "source_doc": str(doc_path),
                     "source_section": chunk.section,
                     "line_range": [chunk.line_start, chunk.line_end],
