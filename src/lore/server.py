@@ -34,6 +34,7 @@ from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from . import telemetry
 from .db_client import DatabaseBackend, get_db_client
 
 # Import document processor and MCP scanner
@@ -282,6 +283,36 @@ _TOOL_DEFINITIONS = [
                     "description": (
                         "Explicit search mode. Overrides semantic/hybrid flags. "
                         "Falls back to FTS when semantic is unavailable."
+                    ),
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional opaque id linking related searches in one session "
+                        "(retrieval telemetry, issue #5). No effect unless "
+                        "LORE_HARD_NEGATIVE_MINING=true on a PostgreSQL backend."
+                    ),
+                },
+                "parent_query_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional query_id of the search this one re-queries/refines "
+                        "(retrieval telemetry, issue #5)."
+                    ),
+                },
+                "required_requery": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Optional hint that this search was a re-query after an "
+                        "unsatisfying prior result (retrieval telemetry, issue #5)."
+                    ),
+                },
+                "caller_agent": {
+                    "type": "string",
+                    "description": (
+                        "Optional name of the agent/user issuing the search "
+                        "(retrieval telemetry, issue #5)."
                     ),
                 },
             },
@@ -1201,6 +1232,52 @@ def handle_kb_add(
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
+def _finalize_search_response(
+    resp_data: dict,
+    *,
+    query: str,
+    topic: str | None,
+    session_id: str | None,
+    parent_query_id: str | None,
+    required_requery: bool,
+    caller_agent: str | None,
+) -> dict:
+    """Attach a ``query_id`` and fire-and-forget telemetry for one kb_search.
+
+    Called immediately before every ``kb_search`` success return so all result
+    paths are covered (Issue #5, Fix 2). When mining is disabled this is a
+    near-zero-cost no-op: the ``resp_data`` dict is returned unchanged and no
+    telemetry is written. Mutates ``resp_data`` in place and returns it so the
+    caller can pass the same object to ``ResponseEnvelope.success``.
+    """
+    if not telemetry.mining_enabled():
+        return resp_data
+
+    from lore import __version__ as _lore_version
+
+    qid = telemetry.generate_query_id()
+    resp_data["query_id"] = qid
+
+    results = resp_data.get("results") or []
+    doc_ids = [r.get("kb_id") for r in results if r.get("kb_id")]
+
+    telemetry.write_retrieval_telemetry_async(
+        query_id=qid,
+        query_text=query,
+        topic=topic,
+        search_mode=resp_data.get("search_mode"),
+        retrieved_document_ids=doc_ids,
+        result_count=resp_data.get("count", 0),
+        session_id=session_id,
+        parent_query_id=parent_query_id,
+        required_requery=required_requery,
+        caller_agent=caller_agent,
+        model_version=_lore_version,
+        db=db,
+    )
+    return resp_data
+
+
 def handle_kb_search(
     query: str,
     topic: str = None,
@@ -1208,6 +1285,10 @@ def handle_kb_search(
     semantic: bool = False,
     hybrid: bool = False,
     search_mode: str = None,
+    session_id: str = None,
+    parent_query_id: str = None,
+    required_requery: bool = False,
+    caller_agent: str = None,
 ) -> dict:
     """Search KB entries.
 
@@ -1222,6 +1303,18 @@ def handle_kb_search(
     """
     try:
         from lore import search as _search  # local import: tolerant of degraded envs
+
+        # Telemetry context shared by all success-return paths (Issue #5, Fix 2).
+        # _finalize_search_response is invoked just before each return so every
+        # one of the 5 result paths is covered and tagged with a query_id.
+        _telemetry_ctx = dict(
+            query=query,
+            topic=topic,
+            session_id=session_id,
+            parent_query_id=parent_query_id,
+            required_requery=required_requery,
+            caller_agent=caller_agent,
+        )
 
         # Determine the requested mode.
         if search_mode in {"fts", "semantic", "hybrid"}:
@@ -1300,7 +1393,7 @@ def handle_kb_search(
                 resp_data["rrf_k"] = _search.rrf_k()
             return ResponseEnvelope.success(
                 f"Found {len(results)} KB entries (mode={effective_mode})",
-                resp_data,
+                _finalize_search_response(resp_data, **_telemetry_ctx),
             )
 
         # PostgreSQL semantic/hybrid path (Phase 2 of Issue #6).
@@ -1335,7 +1428,7 @@ def handle_kb_search(
                 resp_data["rrf_k"] = _search.rrf_k()
             return ResponseEnvelope.success(
                 f"Found {len(results)} KB entries (mode={requested_mode})",
-                resp_data,
+                _finalize_search_response(resp_data, **_telemetry_ctx),
             )
 
         # SQLite FTS5-only fast path (no embeddings required).
@@ -1343,29 +1436,31 @@ def handle_kb_search(
             results = _search.fts5_search_sqlite(db, query, topic, top_k_int)
             # Strip content from response (consistent with hybrid path).
             results = [{k: v for k, v in r.items() if k != "content"} for r in results]
+            resp_data = {
+                "results": results,
+                "count": len(results),
+                "search_mode": "fts",
+                "requested_mode": requested_mode,
+            }
             return ResponseEnvelope.success(
                 f"Found {len(results)} KB entries (mode=fts)",
-                {
-                    "results": results,
-                    "count": len(results),
-                    "search_mode": "fts",
-                    "requested_mode": requested_mode,
-                },
+                _finalize_search_response(resp_data, **_telemetry_ctx),
             )
 
         # PostgreSQL FTS-only path (uses the existing GIN index, no embeddings required).
         if is_postgres and requested_mode == "fts":
             pg_rows = _search.fts_search_postgres(db, query, topic, top_k_int)
             pg_rows = [{k: v for k, v in r.items() if k != "content"} for r in pg_rows]
+            resp_data = {
+                "results": pg_rows,
+                "count": len(pg_rows),
+                "search_mode": "fts",
+                "requested_mode": requested_mode,
+                "backend": "postgres",
+            }
             return ResponseEnvelope.success(
                 f"Found {len(pg_rows)} KB entries (mode=fts)",
-                {
-                    "results": pg_rows,
-                    "count": len(pg_rows),
-                    "search_mode": "fts",
-                    "requested_mode": requested_mode,
-                    "backend": "postgres",
-                },
+                _finalize_search_response(resp_data, **_telemetry_ctx),
             )
 
         # Legacy lexical search path. Preserves today's behavior on SQLite (LIKE
@@ -1406,7 +1501,7 @@ def handle_kb_search(
 
         return ResponseEnvelope.success(
             f"Found {len(result.data)} KB entries",
-            envelope_data,
+            _finalize_search_response(envelope_data, **_telemetry_ctx),
         )
     except Exception as e:
         logger.error(f"Error searching KB: {e}")
@@ -3127,6 +3222,19 @@ def main() -> None:
     db = get_db_client()
     backend = os.getenv("DB_BACKEND", "sqlite")
     logger.info(f"Connected to database backend: {backend}")
+
+    # Hard negative mining (issue #5) is PostgreSQL-only. Warn once at startup
+    # if it's been requested on a non-PostgreSQL backend so the operator knows
+    # telemetry capture is silently inactive.
+    if (
+        os.getenv("LORE_HARD_NEGATIVE_MINING", "false").strip().lower() == "true"
+        and not telemetry.mining_enabled()
+    ):
+        logger.warning(
+            "LORE_HARD_NEGATIVE_MINING=true but DB_BACKEND=%s is not PostgreSQL; "
+            "retrieval telemetry capture is disabled (PostgreSQL only).",
+            backend,
+        )
 
     if args.host is not None or args.port is not None:
         # HTTP/SSE mode — delegate to the wrapper, which mounts our 'app'.

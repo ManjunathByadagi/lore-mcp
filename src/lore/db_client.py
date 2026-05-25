@@ -251,6 +251,19 @@ class LocalPostgresClient:
         finally:
             cursor.close()
 
+        # Retrieval telemetry schema (Issue #5, Phase 1). Isolated in its own
+        # try/except so a telemetry failure can NEVER touch vec_extension_loaded
+        # or _schema_initialized — those are owned exclusively by the pgvector
+        # block above. Local import avoids a circular import at module load.
+        from lore import telemetry as telemetry_module
+
+        if telemetry_module.mining_enabled():
+            try:
+                telemetry_module.ensure_telemetry_schema(self._conn)
+                logger.info("Retrieval telemetry schema ready")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to initialize telemetry schema (non-fatal): %s", e)
+
     def table(self, name: str) -> "TableQuery":
         """Start a query on a table (Supabase-compatible interface)."""
         return TableQuery(self, name)

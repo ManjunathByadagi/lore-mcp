@@ -191,6 +191,10 @@ def kb_search(
     semantic: bool = False,
     hybrid: bool = False,
     search_mode: Literal["fts", "semantic", "hybrid"] | None = None,
+    session_id: str | None = None,
+    parent_query_id: str | None = None,
+    required_requery: bool = False,
+    caller_agent: str | None = None,
 ) -> str:
     return _json(
         _srv.handle_kb_search(
@@ -200,6 +204,10 @@ def kb_search(
             semantic=semantic,
             hybrid=hybrid,
             search_mode=search_mode,
+            session_id=session_id,
+            parent_query_id=parent_query_id,
+            required_requery=required_requery,
+            caller_agent=caller_agent,
         )
     )
 
