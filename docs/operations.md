@@ -61,6 +61,7 @@ pip install --upgrade "lore-knowledge-mcp[semantic]"
 
 | Variable | Default | Controls | When to change |
 |---|---|---|---|
+| `LORE_ENV` | `production` | Environment label stamped into every tool response (`env` field) and used for production guardrails | Set `staging`/`development` to relax guardrails on non-prod instances |
 | `LORE_SEMANTIC_SEARCH` | `false` | Master switch for all semantic features | Set `true` to enable semantic/hybrid search |
 | `LORE_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Which HuggingFace model to use for embeddings | Switch to multilingual or higher-quality model |
 | `LORE_EMBEDDING_BACKEND` | `onnx` | sentence-transformers inference backend (`onnx` or `torch`) | Set `torch` if ONNX export unavailable for chosen model |
@@ -83,6 +84,24 @@ pip install --upgrade "lore-knowledge-mcp[semantic]"
 | `POSTGRES_USER` | - | Required |
 | `POSTGRES_PASSWORD` | - | Required |
 
+### LORE_ENV
+
+Set the environment name included in all tool responses and used for production guardrails.
+
+- `LORE_ENV=production` (default when unset) — enables the `confirm_production` guard on destructive/expensive tools (e.g. `kb_backfill_embeddings`, and `kb_ingest_dir` for batches over 100 files)
+- `LORE_ENV=staging` — relaxed guardrails
+- `LORE_ENV=development` — relaxed guardrails
+
+Every tool response carries an `env` field so callers (agents and humans) can immediately see which environment they are operating against:
+
+```json
+{"ok": true, "error": null, "message": "...", "env": "production", "data": {...}}
+```
+
+**Production guard.** When `LORE_ENV=production` (or unset), a real (non-`dry_run`) call to `kb_backfill_embeddings` requires `confirm_production=true`; otherwise it returns a `production_guard` error and does NOT run. Dry runs (`dry_run=true`) and non-prod environments never require the flag. This guard exists because an agent once ran a full backfill against production while believing it was on staging.
+
+**Operator note (systemd).** Operators should set `LORE_ENV` explicitly in the service unit on each host so the `env` label and guards are unambiguous, e.g. add `Environment="LORE_ENV=production"` to the production unit (and `Environment="LORE_ENV=staging"` on staging). If the variable is unset, Lore fails safe by treating the instance as production.
+
 ---
 
 ## Backfill Operations
@@ -95,13 +114,17 @@ Backfill is needed when:
 ### Running a Backfill
 
 ```python
-# Dry run first - see how many entries need embedding
+# Dry run first - see how many entries need embedding (never needs confirmation)
 kb_backfill_embeddings(dry_run=True)
 # Response: {"total_entries": 847, "needs_embedding": 412, "already_current": 435}
 
-# Run the backfill
-kb_backfill_embeddings(batch_size=32)
+# Run the backfill. In production (LORE_ENV=production or unset) you MUST pass
+# confirm_production=true or the call is rejected with a production_guard error.
+kb_backfill_embeddings(batch_size=32, confirm_production=True)
 # Response: {"embedded": 412, "failed": 0, "already_current": 435}
+
+# On staging/development (LORE_ENV=staging|development) no confirmation is needed:
+# kb_backfill_embeddings(batch_size=32)
 
 # Verify coverage
 kb_embedding_status()

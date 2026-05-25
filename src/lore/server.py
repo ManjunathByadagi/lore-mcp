@@ -107,6 +107,43 @@ def _sanitize_search_query(query: str) -> str:
     return " ".join(sanitized.split()).strip()
 
 
+# Above this file count, kb_ingest_dir is treated as a bulk write and
+# requires confirm_production in production (issue #11).
+_INGEST_DIR_GUARD_THRESHOLD = 100
+
+
+def _is_production() -> bool:
+    """Whether the active environment is production.
+
+    Sourced from ``LORE_ENV`` and defaults to production when unset so an
+    unconfigured deployment is treated as production (fail-safe).
+    """
+    return os.getenv("LORE_ENV", "production").strip().lower() == "production"
+
+
+def _production_guard(
+    tool_name: str, confirm_production: bool, dry_run: bool = False
+) -> dict | None:
+    """Return an error response if a destructive op needs confirmation in prod.
+
+    The guard fires only when ALL of the following hold:
+      - ``LORE_ENV`` is ``production`` (or unset — fail-safe default), AND
+      - the caller did not pass ``confirm_production=True``, AND
+      - the call is not a ``dry_run`` (dry runs never write, so always safe).
+
+    Returns ``None`` when the call is permitted; otherwise a ready-to-return
+    error envelope explaining how to proceed. Centralising the logic keeps the
+    confirmation contract identical across every guarded tool.
+    """
+    if dry_run or confirm_production or not _is_production():
+        return None
+    return ResponseEnvelope.error(
+        ErrorCodes.PRODUCTION_GUARD,
+        f"{tool_name} requires confirm_production=true when LORE_ENV=production. "
+        "This prevents accidental large-scale writes. Pass confirm_production=true to proceed.",
+    )
+
+
 def _coerce_arguments(arguments: dict, schema: dict) -> dict:
     """Coerce JSON-stringified array/object values into proper Python types.
 
@@ -477,6 +514,15 @@ _TOOL_DEFINITIONS = [
                     "default": "system",
                     "description": "Source type for attribution (defaults to 'system' since ingestion is automated)",
                 },
+                "confirm_production": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Required (true) to ingest more than 100 files when "
+                        "LORE_ENV=production. Guards against accidental bulk "
+                        "writes; not required for smaller ingests or non-prod."
+                    ),
+                },
             },
             "required": ["dir_path"],
         },
@@ -517,6 +563,15 @@ _TOOL_DEFINITIONS = [
                     "type": "boolean",
                     "default": False,
                     "description": "If true, report what would be embedded without writing.",
+                },
+                "confirm_production": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Required (true) to run a real backfill when "
+                        "LORE_ENV=production. Guards against accidental "
+                        "large-scale writes; ignored for dry runs and non-prod."
+                    ),
                 },
             },
         },
@@ -1948,8 +2003,15 @@ async def handle_kb_ingest_dir(
     exclude_patterns: list[str] = None,
     author: str = None,
     source_type: str = "system",
+    confirm_production: bool = False,
 ) -> dict:
-    """Batch ingest directory (5x faster with async/await)."""
+    """Batch ingest directory (5x faster with async/await).
+
+    When ``LORE_ENV=production`` (or unset) and the match set exceeds
+    ``_INGEST_DIR_GUARD_THRESHOLD`` files, ``confirm_production=True`` is
+    required to guard against accidental bulk writes against the wrong
+    environment.
+    """
     import asyncio
 
     USE_ASYNC_INGESTION = os.getenv("ENABLE_ASYNC_INGESTION", "true").lower() == "true"
@@ -1980,6 +2042,14 @@ async def handle_kb_ingest_dir(
                 f"No files found matching pattern: {pattern}",
                 {"processed": 0, "created": 0, "updated": 0, "unchanged": 0, "errors": []},
             )
+
+        # Production guard: a large bulk ingest is a high-cost write. Only the
+        # large-set case needs confirmation; small ingests stay friction-free.
+        if len(files) > _INGEST_DIR_GUARD_THRESHOLD:
+            guard = _production_guard("kb_ingest_dir", confirm_production)
+            if guard is not None:
+                guard["data"] = {"matched_files": len(files)}
+                return guard
 
         created = 0
         updated = 0
@@ -2225,6 +2295,7 @@ def handle_kb_backfill_embeddings(
     batch_size: int = 32,
     limit: int | None = None,
     dry_run: bool = False,
+    confirm_production: bool = False,
 ) -> dict:
     """Embed any KB entries missing or stale embeddings.
 
@@ -2238,7 +2309,15 @@ def handle_kb_backfill_embeddings(
     concurrent processes cannot race each other to embed the same rows.
     Per-row hash guards inside the persist helpers keep the loop safe even
     when the lock is missed.
+
+    When ``LORE_ENV=production`` (or unset) a real (non-dry-run) backfill
+    requires ``confirm_production=True`` to guard against accidental
+    large-scale writes against the wrong environment.
     """
+    guard = _production_guard("kb_backfill_embeddings", confirm_production, dry_run)
+    if guard is not None:
+        return guard
+
     backend = _backend_kind()
     if backend == "":
         return ResponseEnvelope.error(

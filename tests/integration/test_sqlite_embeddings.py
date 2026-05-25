@@ -44,6 +44,9 @@ def fresh_server(monkeypatch):
     tmp = tempfile.mkdtemp(prefix="lore_sqlite_test_")
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
+    # Treat the test instance as non-prod so the issue #11 production guard
+    # does not require confirm_production on backfill calls.
+    monkeypatch.setenv("LORE_ENV", "staging")
     monkeypatch.setenv("SQLITE_DB_PATH", str(Path(tmp) / "kb.db"))
 
     import lore.server as s

@@ -66,6 +66,10 @@ pytestmark.append(
 @pytest.fixture(scope="module")
 def server_module():
     """Import the server module once. We rely on the live PG connection."""
+    # Treat the test instance as non-prod so the issue #11 production guard
+    # does not require confirm_production on backfill calls.
+    os.environ.setdefault("LORE_ENV", "staging")
+
     import lore.server as s
 
     # Force a fresh module so _init_schema runs against the current env.

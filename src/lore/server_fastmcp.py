@@ -362,6 +362,7 @@ async def kb_ingest_dir(
     exclude_patterns: str | list[str] | None = None,
     author: str | None = None,
     source_type: str = "system",
+    confirm_production: bool = False,
 ) -> str:
     # handle_kb_ingest_dir is async — await it.
     result = await _srv.handle_kb_ingest_dir(
@@ -372,6 +373,7 @@ async def kb_ingest_dir(
         exclude_patterns=_coerce_tags(exclude_patterns),
         author=author,
         source_type=source_type,
+        confirm_production=confirm_production,
     )
     return _json(result)
 
@@ -395,9 +397,15 @@ def kb_backfill_embeddings(
     batch_size: int = 32,
     limit: int | None = None,
     dry_run: bool = False,
+    confirm_production: bool = False,
 ) -> str:
     return _json(
-        _srv.handle_kb_backfill_embeddings(batch_size=batch_size, limit=limit, dry_run=dry_run)
+        _srv.handle_kb_backfill_embeddings(
+            batch_size=batch_size,
+            limit=limit,
+            dry_run=dry_run,
+            confirm_production=confirm_production,
+        )
     )
 
 

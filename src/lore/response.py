@@ -1,6 +1,18 @@
 """Standard response envelope and error codes."""
 
+import os
 from typing import Any
+
+
+def current_env() -> str:
+    """Return the active environment label for tool responses.
+
+    Sourced from ``LORE_ENV``; defaults to ``"production"`` when unset so that
+    an unconfigured deployment is treated as production (fail-safe). This value
+    is stamped into every tool response so callers can immediately see which
+    environment they are operating against.
+    """
+    return os.getenv("LORE_ENV", "production")
 
 
 class ResponseEnvelope:
@@ -9,7 +21,13 @@ class ResponseEnvelope:
     @staticmethod
     def success(message: str, data: Any = None) -> dict:
         """Create a success response."""
-        return {"ok": True, "error": None, "message": message, "data": data or {}}
+        return {
+            "ok": True,
+            "error": None,
+            "message": message,
+            "env": current_env(),
+            "data": data or {},
+        }
 
     @staticmethod
     def ok(message: str, data: Any = None) -> dict:
@@ -19,7 +37,13 @@ class ResponseEnvelope:
     @staticmethod
     def error(code: str, message: str, data: Any = None) -> dict:
         """Create an error response."""
-        return {"ok": False, "error": code, "message": message, "data": data or {}}
+        return {
+            "ok": False,
+            "error": code,
+            "message": message,
+            "env": current_env(),
+            "data": data or {},
+        }
 
 
 class ErrorCodes:
@@ -37,3 +61,4 @@ class ErrorCodes:
     UNIT_NOT_ALLOWED = "unit_not_allowed"
     INTERNAL_ERROR = "internal_error"
     EXTERNAL_SERVICE_ERROR = "external_service_error"
+    PRODUCTION_GUARD = "production_guard"
