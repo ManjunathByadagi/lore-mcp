@@ -3081,7 +3081,7 @@ def handle_multi_search(query: str) -> dict:
             results["local"] = local_result["data"]["results"][:10]
 
         # Knowledge search using kb_search
-        knowledge_result = handle_kb_search(query)
+        knowledge_result = handle_kb_search(query, caller_agent="multi_search")
         if knowledge_result.get("ok"):
             results["knowledge"] = {"kb_entries": knowledge_result["data"]["results"]}
 
