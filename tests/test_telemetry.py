@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -345,9 +346,9 @@ def test_notes_migration_matches_constant():
     sql_start = text.index("ALTER TABLE")
     migration_ddl = _normalize_sql(text[sql_start:])
     assert migration_ddl == _normalize_sql(telemetry.TELEMETRY_NOTES_DDL)
-    # The constant is the exact single-line ALTER ... statement.
+    # The constant is the exact single-line ALTER ... statement (with trailing ;).
     assert telemetry.TELEMETRY_NOTES_DDL == (
-        "ALTER TABLE knowledge.retrieval_telemetry ADD COLUMN IF NOT EXISTS notes TEXT"
+        "ALTER TABLE knowledge.retrieval_telemetry ADD COLUMN IF NOT EXISTS notes TEXT;"
     )
 
 
@@ -377,7 +378,9 @@ def test_ensure_telemetry_schema_applies_notes_ddl():
     base = [s.strip() for s in telemetry.TELEMETRY_PG_SCHEMA.split(";") if s.strip()]
     # 1 table + 3 indexes + 1 notes column.
     assert len(cursor.executed) == len(base) + 1 == 5
-    assert cursor.executed[-1] == telemetry.TELEMETRY_NOTES_DDL
+    # ensure_telemetry_schema strips the trailing ';' before executing so
+    # psycopg2 receives a single semicolon-free statement (multi-statement invariant).
+    assert cursor.executed[-1] == telemetry.TELEMETRY_NOTES_DDL.rstrip(";").strip()
     assert all(";" not in stmt for stmt in cursor.executed)
 
 
@@ -540,6 +543,95 @@ def test_fetch_telemetry_query_id_precedence(monkeypatch, pg_db):
     sql, params = cur.executed[0]
     assert "WHERE query_id = %s" in sql
     assert params == ("qry_1",)
+
+
+def test_fetch_telemetry_topic_branch(monkeypatch, pg_db):
+    """topic selector (no query_id/session_id) filters by topic, newest-first."""
+    cur = _FakeRWCursor(fetchall=[])
+    _patch_connect(monkeypatch, _FakeConn(cur))
+    telemetry.fetch_retrieval_telemetry(
+        query_id=None, session_id=None, topic="qa_test", limit=10, db=pg_db
+    )
+    sql, params = cur.executed[0]
+    assert "WHERE topic = %s" in sql
+    assert "ORDER BY created_at DESC LIMIT" in sql
+    assert params == ("qa_test", 10)
+
+
+def test_fetch_telemetry_all_none_branch(monkeypatch, pg_db):
+    """All selectors None => recent rows: no WHERE clause, newest-first LIMIT."""
+    cur = _FakeRWCursor(fetchall=[])
+    _patch_connect(monkeypatch, _FakeConn(cur))
+    telemetry.fetch_retrieval_telemetry(
+        query_id=None, session_id=None, topic=None, limit=10, db=pg_db
+    )
+    sql, params = cur.executed[0]
+    assert "WHERE" not in sql
+    assert "ORDER BY created_at DESC LIMIT" in sql
+    assert params == (10,)
+
+
+def test_update_feedback_score_only(monkeypatch, pg_db):
+    """COALESCE partial update with score only leaves notes param as None."""
+    cur = _FakeRWCursor(rowcount=1)
+    _patch_connect(monkeypatch, _FakeConn(cur))
+    rc = telemetry.update_retrieval_feedback(
+        query_id="qry_x", user_feedback_score=3, notes=None, db=pg_db
+    )
+    assert rc == 1
+    _sql, params = cur.executed[0]
+    assert params == (3, None, "qry_x")
+
+
+def test_write_row_swallows_execute_error(caplog):
+    """A cursor.execute() failure after a successful connect must be logged at
+    WARNING, never raised (best-effort telemetry)."""
+    import logging
+
+    import psycopg2
+
+    class _BoomCursor:
+        def execute(self, *_a, **_k):
+            raise psycopg2.IntegrityError("duplicate key")
+
+        def close(self):
+            pass
+
+    class _BoomConn:
+        autocommit = False
+
+        def set_client_encoding(self, *_a, **_k):
+            pass
+
+        def cursor(self):
+            return _BoomCursor()
+
+        def close(self):
+            pass
+
+    with caplog.at_level(logging.WARNING, logger="lore.telemetry"):
+        with mock.patch.object(psycopg2, "connect", lambda **_k: _BoomConn()):
+            telemetry._write_row(
+                conn_params={
+                    "host": "h",
+                    "port": 5432,
+                    "dbname": "d",
+                    "user": "u",
+                    "password": "p",
+                },
+                query_id="qry_dup0000000",
+                query_text="q",
+                topic=None,
+                search_mode="fts",
+                retrieved_document_ids=[],
+                result_count=0,
+                session_id=None,
+                parent_query_id=None,
+                required_requery=False,
+                caller_agent=None,
+                model_version="0.0.0",
+            )
+    assert any("retrieval telemetry" in r.message.lower() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

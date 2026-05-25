@@ -13,6 +13,7 @@ Spec: Lore v0.4.0 — KG and source-tracking tool surfaces removed; research sur
 renamed to investigations; attribution model added (author, source_type, verified).
 """
 
+import decimal
 import glob as glob_module
 import hashlib
 import json
@@ -82,9 +83,13 @@ KNOWLEDGE_DATA_DIR = Path(get_env("KNOWLEDGE_DATA_DIR", "/srv/latvian_mcp/data/k
 
 
 def json_serializer(obj):
-    """Custom JSON serializer for datetime objects."""
+    """Custom JSON serializer for datetime, UUID, and Decimal objects."""
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
@@ -1695,6 +1700,10 @@ def handle_get_retrieval_telemetry(
             db=db,
         )
         rows = rows or []
+        if query_id is not None and len(rows) == 0:
+            return ResponseEnvelope.error(
+                ErrorCodes.NOT_FOUND, f"No telemetry row for query_id: {query_id}"
+            )
         return ResponseEnvelope.success(
             f"Found {len(rows)} telemetry rows",
             {"rows": rows, "count": len(rows)},
@@ -1714,7 +1723,11 @@ def handle_get_telemetry_stats(session_id: str = None, topic: str = None) -> dic
             )
 
         stats = telemetry.fetch_telemetry_stats(session_id=session_id, topic=topic, db=db)
-        return ResponseEnvelope.success("Telemetry stats", {"stats": stats or {}})
+        if stats is None:
+            return ResponseEnvelope.error(
+                ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable"
+            )
+        return ResponseEnvelope.success("Telemetry stats", {"stats": stats})
     except Exception as e:
         logger.error(f"Error fetching telemetry stats: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
@@ -3350,8 +3363,15 @@ def handle_deduplicate_results(results: list[dict], threshold: float = 0.9) -> d
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_cluster_results(results: list[dict], num_clusters: int = 5) -> dict:
-    """Cluster search results by topic."""
+def handle_cluster_results(
+    results: list[dict], num_clusters: int = 5, n_clusters: int | None = None
+) -> dict:
+    """Cluster search results by topic.
+
+    ``n_clusters`` is accepted as an alias for ``num_clusters`` (QA compat).
+    Clustering is automatic (grouped by file/source key), so neither value
+    affects the grouping — both are accepted only for signature compatibility.
+    """
     try:
         clusters = {}
 

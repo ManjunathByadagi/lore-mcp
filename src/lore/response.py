@@ -26,7 +26,7 @@ class ResponseEnvelope:
             "error": None,
             "message": message,
             "env": current_env(),
-            "data": data or {},
+            "data": data if data is not None else {},
         }
 
     @staticmethod
@@ -42,7 +42,7 @@ class ResponseEnvelope:
             "error": code,
             "message": message,
             "env": current_env(),
-            "data": data or {},
+            "data": data if data is not None else {},
         }
 
 
@@ -50,15 +50,18 @@ class ErrorCodes:
     """Common error codes across all servers."""
 
     UNEXPECTED_EXCEPTION = "unexpected_exception"
-    INVALID_ARGUMENT = "invalid_argument"
-    INVALID_INPUT = "invalid_input"  # Alias for INVALID_ARGUMENT
+    INVALID_INPUT = "invalid_input"
+    # Alias for INVALID_INPUT: both names resolve to the same string value so
+    # callers may use either interchangeably without ambiguous responses.
+    INVALID_ARGUMENT = INVALID_INPUT
     NOT_FOUND = "not_found"
     IO_ERROR = "io_error"
-    NONZERO_EXIT = "nonzero_exit"
-    TIMEOUT = "timeout"
-    FORBIDDEN = "forbidden"
     POLICY_VIOLATION = "policy_violation"
     UNIT_NOT_ALLOWED = "unit_not_allowed"
     INTERNAL_ERROR = "internal_error"
     EXTERNAL_SERVICE_ERROR = "external_service_error"
     PRODUCTION_GUARD = "production_guard"
+    # Reserved for future use — not currently emitted by any handler.
+    NONZERO_EXIT = "nonzero_exit"
+    TIMEOUT = "timeout"
+    FORBIDDEN = "forbidden"

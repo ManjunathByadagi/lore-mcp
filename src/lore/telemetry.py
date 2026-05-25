@@ -79,7 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_retrieval_telemetry_parent ON knowledge.retrieval
 # and byte-for-byte identical to migration 005). This single statement mirrors
 # migrations/006_telemetry_notes.sql (a unit test enforces parity).
 TELEMETRY_NOTES_DDL = (
-    "ALTER TABLE knowledge.retrieval_telemetry ADD COLUMN IF NOT EXISTS notes TEXT"
+    "ALTER TABLE knowledge.retrieval_telemetry ADD COLUMN IF NOT EXISTS notes TEXT;"
 )
 
 # Phase 2 bounds (Issue #5):
@@ -107,7 +107,7 @@ def ensure_telemetry_schema(conn) -> None:
         # silently dropped on a fresh database). The Phase 2 notes column
         # (migration 006) is applied as one more statement after the base schema.
         statements = [s.strip() for s in TELEMETRY_PG_SCHEMA.split(";") if s.strip()]
-        statements.append(TELEMETRY_NOTES_DDL)
+        statements.append(TELEMETRY_NOTES_DDL.rstrip(";").strip())
         for stmt in statements:
             cursor.execute(stmt)
     finally:
@@ -292,7 +292,7 @@ def clamp_read_limit(limit: Any) -> int:
     """
     try:
         value = int(limit)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         value = DEFAULT_READ_LIMIT
     return max(1, min(MAX_READ_LIMIT, value))
 
@@ -324,9 +324,10 @@ def update_retrieval_feedback(
     if notes is not None and len(notes) > MAX_NOTES_LEN:
         notes = notes[:MAX_NOTES_LEN]
 
-    conn = psycopg2.connect(**conn_params)
-    conn.autocommit = True
+    conn = None
     try:
+        conn = psycopg2.connect(**conn_params)
+        conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -339,7 +340,8 @@ def update_retrieval_feedback(
             )
             return cur.rowcount
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def fetch_retrieval_telemetry(
@@ -429,6 +431,11 @@ def fetch_telemetry_stats(
                 """,
                 {"session_id": session_id, "topic": topic},
             )
-            return dict(cur.fetchone())
+            row = cur.fetchone()
+            return dict(row) if row is not None else {
+                "total": 0, "with_feedback": 0, "requeries": 0,
+                "with_notes": 0, "avg_feedback_score": None,
+                "oldest": None, "newest": None
+            }
     finally:
         conn.close()

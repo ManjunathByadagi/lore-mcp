@@ -497,7 +497,14 @@ def deduplicate_results(results: list[dict], threshold: float = 0.9) -> str:
 
 
 @mcp.tool(description="Cluster search results by topic/source type")
-def cluster_results(results: list[dict], num_clusters: int = 5) -> str:
+def cluster_results(
+    results: list[dict], num_clusters: int = 5, n_clusters: int | None = None
+) -> str:
+    # n_clusters is accepted as an alias for num_clusters (QA compat). Clustering
+    # is automatic (by file/source key), so neither value affects the grouping —
+    # both are forwarded only for signature compatibility.
+    if n_clusters is not None:
+        num_clusters = n_clusters
     return _json(_srv.handle_cluster_results(results=results, num_clusters=num_clusters))
 
 
@@ -681,6 +688,10 @@ async def _jsonrpc_dispatch(request: Request) -> JSONResponse:
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request) -> JSONResponse:  # noqa: ARG001
     """Liveness probe."""
+    if _srv.db is None:
+        return JSONResponse(
+            {"status": "unhealthy", "reason": "db_not_initialized"}, status_code=503
+        )
     return JSONResponse({"status": "healthy"})
 
 
