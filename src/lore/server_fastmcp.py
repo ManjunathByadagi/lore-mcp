@@ -604,11 +604,17 @@ def get_hard_negatives(
     "create the HNSW index after backfill."
 ))
 def backfill_query_embeddings(
-    batch_size: int = 32,
-    limit: int = 1000,
+    batch_size: int = 32,   # Rows per batch (1–200, default 32)
+    limit: int = 1000,      # Max rows to process (1–10000, default 1000)
     dry_run: bool = False,
     build_index: bool = False,
 ) -> str:
+    """Backfill query embeddings for older telemetry rows.
+
+    batch_size is clamped to 1–200 and limit to 1–10000 by the handler, so
+    values outside that range (including 0) cannot drive the batch loop with
+    LIMIT 0 / an empty batch.
+    """
     return _json(_srv.handle_backfill_query_embeddings({
         "batch_size": batch_size,
         "limit": limit,

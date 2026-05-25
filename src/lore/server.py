@@ -959,10 +959,14 @@ _TOOL_DEFINITIONS = [
             "properties": {
                 "batch_size": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,  # lower than kb_backfill (512) — embedding batches include ONNX inference overhead
                     "description": "Rows per batch (1–200, default 32)",
                 },
                 "limit": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000,
                     "description": "Max rows to process (1–10000, default 1000)",
                 },
                 "dry_run": {
@@ -1109,6 +1113,7 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
 
         # Query Embedding Backfill (Issue #5 Phase 4a)
         elif name == "backfill_query_embeddings":
+            # NOTE: takes a single `params: dict` — intentionally not **arguments (unlike other handlers)
             return format_response(handle_backfill_query_embeddings(arguments))
 
         else:

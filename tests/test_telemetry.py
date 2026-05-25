@@ -1444,6 +1444,56 @@ def test_backfill_skips_encode_error(monkeypatch, pg_db):
     assert result["skipped"] == 1
 
 
+class _LimitRecordingCursor:
+    """Records the LIMIT value of every SELECT so we can assert it is never 0.
+
+    Always returns [] from fetchall(), so the backfill loop terminates after a
+    single SELECT regardless of batch_size. The point of this fake is purely to
+    capture the LIMIT bind parameter the loop computes.
+    """
+
+    def __init__(self):
+        self.select_limits: list = []
+
+    def execute(self, sql, params=None):
+        if sql.strip().upper().startswith("SELECT") and params:
+            self.select_limits.append(params[0])  # LIMIT bind value
+
+    def fetchall(self):
+        return []
+
+
+def test_backfill_batch_size_clamped_to_minimum(monkeypatch, pg_db):
+    """batch_size=0 must never reach the loop as LIMIT 0 (no empty-batch spin).
+
+    Routes through the real handler so the defensive max(1, min(batch_size, 200))
+    clamp is exercised end-to-end. A recording cursor captures every SELECT LIMIT
+    value; with the clamp in place the loop fetches with LIMIT >= 1 (here 1) and
+    terminates on the empty result, never issuing LIMIT 0.
+    """
+    import psycopg2
+
+    import lore.server as srv
+
+    cur = _LimitRecordingCursor()
+    monkeypatch.setattr(psycopg2, "connect", lambda **_k: _BackfillConn(cur))
+    # Reach the loop: mining must be enabled and a PG db must be wired in.
+    monkeypatch.setattr(srv.telemetry, "mining_enabled", lambda: True)
+    monkeypatch.setattr(srv, "db", pg_db)
+    # The handler imports encode_text from .embeddings at call time.
+    import lore.embeddings as emb
+
+    monkeypatch.setattr(emb, "encode_text", lambda _t: [0.0] * 384, raising=False)
+
+    resp = srv.handle_backfill_query_embeddings({"batch_size": 0, "limit": 1000})
+
+    assert resp["ok"] is True
+    # The clamp guarantees LIMIT >= 1 on every SELECT; LIMIT 0 would spin/no-op.
+    assert cur.select_limits, "expected at least one SELECT to be issued"
+    assert 0 not in cur.select_limits
+    assert all(lim >= 1 for lim in cur.select_limits)
+
+
 # ---------------------------------------------------------------------------
 # fetch_reranking_bad_docs: best-effort, returns [] on any error
 # ---------------------------------------------------------------------------
