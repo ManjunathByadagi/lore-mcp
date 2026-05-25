@@ -84,7 +84,14 @@ def ensure_telemetry_schema(conn) -> None:
     """
     cursor = conn.cursor()
     try:
-        cursor.execute(TELEMETRY_PG_SCHEMA)
+        # psycopg2's cursor.execute() runs only the first statement in a
+        # multi-statement string, so split on ';' and execute each non-empty
+        # statement individually (otherwise the 3 CREATE INDEX statements are
+        # silently dropped on a fresh database).
+        for stmt in TELEMETRY_PG_SCHEMA.split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                cursor.execute(stmt)
     finally:
         cursor.close()
 

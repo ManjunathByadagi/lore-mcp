@@ -1488,7 +1488,7 @@ def handle_kb_search(
         envelope_data = {
             "results": result.data,
             "count": len(result.data),
-            "search_mode": "lexical",
+            "search_mode": "fts",
             "requested_mode": requested_mode,
         }
         if wants_vectors and not (sqlite_vectors_ok or postgres_vectors_ok):

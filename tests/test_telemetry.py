@@ -105,6 +105,39 @@ def test_schema_matches_migration_file():
     assert migration_ddl == code_ddl
 
 
+def test_ensure_telemetry_schema_executes_each_statement_individually():
+    """psycopg2 only runs the first statement of a multi-statement string, so
+    ensure_telemetry_schema must call cursor.execute once per non-empty
+    statement (1 table + 3 indexes = 4) — a string test alone can't catch this.
+    """
+
+    class _FakeCursor:
+        def __init__(self):
+            self.executed: list[str] = []
+
+        def execute(self, sql):
+            self.executed.append(sql)
+
+        def close(self):
+            pass
+
+    class _FakeConn:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        def cursor(self):
+            return self._cursor
+
+    expected = [s.strip() for s in telemetry.TELEMETRY_PG_SCHEMA.split(";") if s.strip()]
+    cursor = _FakeCursor()
+    telemetry.ensure_telemetry_schema(_FakeConn(cursor))
+
+    assert len(cursor.executed) == len(expected) == 4
+    # Each executed statement is a single, semicolon-free DDL statement.
+    assert all(";" not in stmt for stmt in cursor.executed)
+    assert cursor.executed == expected
+
+
 # ---------------------------------------------------------------------------
 # write_retrieval_telemetry_async() backend guard (Fix 3)
 # ---------------------------------------------------------------------------

@@ -128,6 +128,10 @@ class LocalPostgresClient:
         semantic_enabled = os.getenv("LORE_SEMANTIC_SEARCH", "false").strip().lower() == "true"
         conn = self._conn
         cursor = conn.cursor()
+        # Safe default: if anything fails before the pgvector probe below
+        # (e.g. the GIN-index DDL), skip pgvector setup rather than referencing
+        # an unbound _skip_pgvector later (UnboundLocalError).
+        _skip_pgvector = True
         try:
             # Issue #10: GIN index using simple config + regexp_replace so that
             # dotted/slashed identifiers like asyncio.gather are split into
