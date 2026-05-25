@@ -1894,11 +1894,14 @@ def handle_kb_ingest_doc(
                 "Summary strategy not yet implemented. Use 'full' or 'chunked'.",
             )
 
-        # Update sync tracking
+        # Update sync tracking.
+        # kb_doc_sync.kb_ids is a jsonb column — serialize the Python list to a
+        # JSON string so psycopg2 sends '[...]' rather than a PostgreSQL ARRAY
+        # literal '{...}', which raises a jsonb type-mismatch on insert/update.
         sync_data = {
             "doc_path": str(doc_path),
             "doc_hash": doc_hash,
-            "kb_ids": kb_ids,
+            "kb_ids": json.dumps(kb_ids),
             "last_synced_at": datetime.utcnow().isoformat(),
             "last_modified_at": datetime.fromtimestamp(doc_path.stat().st_mtime).isoformat(),
             "strategy": strategy,

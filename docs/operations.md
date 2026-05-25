@@ -320,6 +320,35 @@ export LORE_DEBUG_SEARCH=true
 | Model load on every request | Warm the server with one query after startup |
 | Large batch during backfill causes memory spikes | Reduce `LORE_EMBEDDING_BATCH_SIZE` |
 
+### `semantic_enabled: false` after deployment
+
+If `kb_embedding_status` reports `semantic_enabled: false` and `vec_extension_loaded: false`
+immediately after a fresh deployment or migration, check PostgreSQL table ownership.
+`_init_schema()` creates indexes on `knowledge.*` tables — PostgreSQL requires the executing
+user to be the table owner for this, even when the index already exists.
+
+**Diagnose:**
+```sql
+SELECT tablename, tableowner FROM pg_tables WHERE schemaname = 'knowledge';
+```
+
+All tables should be owned by the application user (e.g., `latvian_user`). If any are owned
+by `postgres`, transfer ownership:
+
+```sql
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'knowledge' LOOP
+    EXECUTE 'ALTER TABLE knowledge.' || quote_ident(r.tablename) || ' OWNER TO latvian_user';
+  END LOOP;
+END $$;
+```
+
+Then restart the service: `systemctl restart lore.service`
+
+> **Prevention**: Run this ownership transfer as part of every migration that creates new tables.
+
 ---
 
 ## Performance Tuning Reference
