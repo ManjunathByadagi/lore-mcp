@@ -711,7 +711,13 @@ def fetch_hard_negatives(
     conn.autocommit = True
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, tuple(params))
-            return [dict(row) for row in cur.fetchall()]
+            try:
+                cur.execute(sql, tuple(params))
+                return [dict(row) for row in cur.fetchall()]
+            except psycopg2.errors.UndefinedTable:
+                logger.debug(
+                    "hard_negative_pairs table does not exist yet; returning empty list"
+                )
+                return []
     finally:
         conn.close()

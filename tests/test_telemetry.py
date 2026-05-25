@@ -1121,3 +1121,48 @@ def test_get_hard_negatives_backend_unavailable_returns_error(monkeypatch):
     resp = srv.handle_get_hard_negatives()
     assert resp["ok"] is False
     assert resp["error"] == "unexpected_exception"
+
+
+# ---------------------------------------------------------------------------
+# fetch_hard_negatives: graceful empty result when pairs table not yet created
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_hard_negatives_missing_table_returns_empty(monkeypatch, pg_db):
+    """When the hard_negative_pairs table does not exist (UndefinedTable), the
+    function must return [] rather than propagating the raw psycopg2 exception."""
+    import psycopg2
+    import psycopg2.errors
+
+    class _UndefinedTableCursor:
+        def execute(self, *_a, **_k):
+            raise psycopg2.errors.UndefinedTable(
+                'relation "knowledge.hard_negative_pairs" does not exist'
+            )
+
+        def fetchall(self):  # pragma: no cover — never reached
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    class _UndefinedTableConn:
+        autocommit = False
+
+        def set_client_encoding(self, *_a, **_k):
+            pass
+
+        def cursor(self, **_k):
+            return _UndefinedTableCursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(psycopg2, "connect", lambda **_k: _UndefinedTableConn())
+    result = telemetry.fetch_hard_negatives(
+        signal_type=None, limit=100, doc_id=None, query_text_like=None, db=pg_db
+    )
+    assert result == []
