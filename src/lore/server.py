@@ -2045,7 +2045,7 @@ async def handle_kb_ingest_dir(
 
         # Production guard: a large bulk ingest is a high-cost write. Only the
         # large-set case needs confirmation; small ingests stay friction-free.
-        if len(files) > _INGEST_DIR_GUARD_THRESHOLD:
+        if len(files) >= _INGEST_DIR_GUARD_THRESHOLD:
             guard = _production_guard("kb_ingest_dir", confirm_production)
             if guard is not None:
                 guard["data"] = {"matched_files": len(files)}

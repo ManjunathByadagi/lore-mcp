@@ -81,6 +81,15 @@ def test_guard_allows_non_production(srv, monkeypatch, env):
     assert srv._production_guard("kb_backfill_embeddings", confirm_production=False) is None
 
 
+@pytest.mark.parametrize("env", ["production", "PRODUCTION", "Production"])
+def test_guard_blocks_all_production_casings(srv, monkeypatch, env):
+    """Guard must fire regardless of the case used for LORE_ENV=production."""
+    monkeypatch.setenv("LORE_ENV", env)
+    guard = srv._production_guard("kb_backfill_embeddings", confirm_production=False)
+    assert guard is not None
+    assert guard["error"] == ErrorCodes.PRODUCTION_GUARD
+
+
 # ---------------------------------------------------------------------------
 # kb_backfill_embeddings handler behaviour (guard fires before DB/embedder)
 # ---------------------------------------------------------------------------

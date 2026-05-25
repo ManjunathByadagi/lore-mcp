@@ -76,8 +76,8 @@ class TestBackfillIdempotency:
 
     def test_double_backfill_does_not_error(self, slow_client: LoreClient) -> None:
         """Two consecutive backfill calls must both succeed without error."""
-        result1 = slow_client.kb_backfill_embeddings()
-        result2 = slow_client.kb_backfill_embeddings()
+        result1 = slow_client.kb_backfill_embeddings(confirm_production=True)
+        result2 = slow_client.kb_backfill_embeddings(confirm_production=True)
         assert isinstance(result1, dict)
         assert isinstance(result2, dict)
 
@@ -86,7 +86,7 @@ class TestBackfillIdempotency:
         status_before = slow_client.kb_embedding_status()
         pct_before = _coverage_pct(status_before)
 
-        slow_client.kb_backfill_embeddings()
+        slow_client.kb_backfill_embeddings(confirm_production=True)
 
         status_after = slow_client.kb_embedding_status()
         pct_after = _coverage_pct(status_after)
@@ -100,7 +100,7 @@ class TestBackfillIdempotency:
 
     def test_backfill_status_consistency(self, slow_client: LoreClient) -> None:
         """After backfill the embedding-status totals must remain internally consistent."""
-        slow_client.kb_backfill_embeddings()
+        slow_client.kb_backfill_embeddings(confirm_production=True)
         status = slow_client.kb_embedding_status()
 
         total = status.get("total") or status.get("total_entries", 0)
@@ -139,7 +139,7 @@ class TestBackfillWithNewEntries:
         pct_before = _coverage_pct(status_before)
 
         # Run backfill
-        slow_client.kb_backfill_embeddings()
+        slow_client.kb_backfill_embeddings(confirm_production=True)
 
         # Assert coverage stable or improved
         status_after = slow_client.kb_embedding_status()

@@ -12,7 +12,7 @@ def current_env() -> str:
     is stamped into every tool response so callers can immediately see which
     environment they are operating against.
     """
-    return os.getenv("LORE_ENV", "production")
+    return os.getenv("LORE_ENV", "production").strip().lower()
 
 
 class ResponseEnvelope:
