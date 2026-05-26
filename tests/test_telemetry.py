@@ -913,9 +913,7 @@ def test_hn_schema_contains_table_and_four_indexes():
 
 def test_hn_schema_matches_migration_file():
     """The DDL embedded in code must be byte-for-byte identical to migration 007."""
-    migration = (
-        Path(__file__).resolve().parents[1] / "migrations" / "007_hard_negative_pairs.sql"
-    )
+    migration = Path(__file__).resolve().parents[1] / "migrations" / "007_hard_negative_pairs.sql"
     text = migration.read_text()
     sql_start = text.index("CREATE TABLE IF NOT EXISTS")
     migration_ddl = text[sql_start:].strip()
@@ -981,8 +979,7 @@ def test_ensure_hard_negative_schema_swallows_errors(caplog):
 
 def test_refresh_hard_negative_pairs_none_for_non_pg():
     assert (
-        telemetry.refresh_hard_negative_pairs(since=None, dry_run=False, db=_FakeSqliteDb())
-        is None
+        telemetry.refresh_hard_negative_pairs(since=None, dry_run=False, db=_FakeSqliteDb()) is None
     )
 
 
@@ -1120,8 +1117,12 @@ def test_refresh_hard_negatives_success(monkeypatch):
 
     _enable_mining(monkeypatch)
     fake = {
-        "inserted": 2, "updated": 1, "total_pairs": 3,
-        "processed_telemetry_rows": 4, "since": "all", "dry_run": False,
+        "inserted": 2,
+        "updated": 1,
+        "total_pairs": 3,
+        "processed_telemetry_rows": 4,
+        "since": "all",
+        "dry_run": False,
     }
     monkeypatch.setattr(srv.telemetry, "refresh_hard_negative_pairs", lambda **_k: fake)
     resp = srv.handle_refresh_hard_negatives()
@@ -1135,8 +1136,12 @@ def test_refresh_hard_negatives_dry_run_message(monkeypatch):
 
     _enable_mining(monkeypatch)
     fake = {
-        "inserted": 0, "updated": 0, "total_pairs": 0,
-        "processed_telemetry_rows": 0, "since": "all", "dry_run": True,
+        "inserted": 0,
+        "updated": 0,
+        "total_pairs": 0,
+        "processed_telemetry_rows": 0,
+        "since": "all",
+        "dry_run": True,
     }
     monkeypatch.setattr(srv.telemetry, "refresh_hard_negative_pairs", lambda **_k: fake)
     resp = srv.handle_refresh_hard_negatives(dry_run=True)
@@ -1199,12 +1204,12 @@ def test_get_hard_negatives_all_maps_to_none_filter(monkeypatch):
 @pytest.mark.parametrize(
     "given,expected",
     [
-        (-3, 1),       # below 1 -> floored to 1
-        (1, 1),        # exact lower bound passes through
+        (-3, 1),  # below 1 -> floored to 1
+        (1, 1),  # exact lower bound passes through
         (1001, 1000),  # above MAX_HN_LIMIT -> clamped
         (9999, 1000),  # well above ceiling -> clamped
-        (None, 100),   # None -> DEFAULT_HN_LIMIT
-        (0, 1),        # BUG-9: 0 is now clamped to 1 (explicit None check)
+        (None, 100),  # None -> DEFAULT_HN_LIMIT
+        (0, 1),  # BUG-9: 0 is now clamped to 1 (explicit None check)
         (50, 50),
     ],
 )
@@ -1334,9 +1339,7 @@ def test_reranking_enabled_accepts_truthy_flags(monkeypatch, flag):
 def test_migration_008_parity():
     """migration 008 adds the query_embedding column and must NOT create the
     HNSW index (it is deferred to the backfill_query_embeddings tool)."""
-    migration = (
-        Path(__file__).resolve().parents[1] / "migrations" / "008_query_embedding.sql"
-    )
+    migration = Path(__file__).resolve().parents[1] / "migrations" / "008_query_embedding.sql"
     text = migration.read_text()
     assert "ADD COLUMN IF NOT EXISTS query_embedding halfvec(384)" in text
     # The HNSW index is documented only as a comment; the executable DDL (the

@@ -78,8 +78,7 @@ def test_sqlite_migration_adds_trust_score_to_legacy_db():
             ")"
         )
         raw.execute(
-            "INSERT INTO knowledge_kb_entries (kb_id, topic, title, content) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO knowledge_kb_entries (kb_id, topic, title, content) VALUES (?, ?, ?, ?)",
             ("kb_legacy", "t", "Legacy", "old content"),
         )
         raw.commit()

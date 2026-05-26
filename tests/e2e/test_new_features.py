@@ -38,9 +38,7 @@ def _get_results(result: dict) -> list[dict]:
 class TestMinScore:
     """Verify that kb_search honours the min_score filter parameter."""
 
-    def test_min_score_zero_returns_entry(
-        self, client: LoreClient, cleanup_topic: str
-    ) -> None:
+    def test_min_score_zero_returns_entry(self, client: LoreClient, cleanup_topic: str) -> None:
         """A min_score of 0.0 must not filter out any matching entry."""
         sentinel = "minscore9a2f"
         client.kb_add(
@@ -53,8 +51,7 @@ class TestMinScore:
         result = client.kb_search(sentinel, search_mode="fts", min_score=0.0)
         results = _get_results(result)
         assert len(results) >= 1, (
-            f"min_score=0.0 filtered out all results for sentinel {sentinel!r}. "
-            f"Got: {results}"
+            f"min_score=0.0 filtered out all results for sentinel {sentinel!r}. Got: {results}"
         )
 
     def test_min_score_above_max_returns_empty(
@@ -84,9 +81,7 @@ class TestMinScore:
             f"min_score=1e9 should filter everything but sentinel entry appeared: {sentinel_ids}"
         )
 
-    def test_min_score_response_shape(
-        self, client: LoreClient, cleanup_topic: str
-    ) -> None:
+    def test_min_score_response_shape(self, client: LoreClient, cleanup_topic: str) -> None:
         """kb_search with min_score must return a dict with a 'results' or 'entries' list."""
         sentinel = "minscapeshape3c"
         client.kb_add(
@@ -101,9 +96,7 @@ class TestMinScore:
             f"kb_search did not return a dict; got {type(result).__name__}"
         )
         results = _get_results(result)
-        assert isinstance(results, list), (
-            f"'results'/'entries' field is not a list: {result}"
-        )
+        assert isinstance(results, list), f"'results'/'entries' field is not a list: {result}"
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +117,7 @@ class TestJournalSearch:
         assert isinstance(result, dict), (
             f"journal_search returned {type(result).__name__}, expected dict"
         )
-        assert "entries" in result, (
-            f"journal_search response missing 'entries' key: {result}"
-        )
+        assert "entries" in result, f"journal_search response missing 'entries' key: {result}"
         assert isinstance(result["entries"], list), (
             f"'entries' must be a list, got {type(result['entries']).__name__}"
         )
@@ -135,9 +126,7 @@ class TestJournalSearch:
         """journal_search must return a valid (possibly empty) entries list."""
         result = client.journal_search("deployment")
         entries = result.get("entries", [])
-        assert isinstance(entries, list), (
-            f"'entries' must be a list, got {type(entries).__name__}"
-        )
+        assert isinstance(entries, list), f"'entries' must be a list, got {type(entries).__name__}"
 
     def test_fts_mode_returns_correct_shape(self, client: LoreClient) -> None:
         """journal_search does not accept a mode parameter; verify shape without one."""
@@ -151,9 +140,7 @@ class TestJournalSearch:
     def test_backend_field_present(self, client: LoreClient) -> None:
         """journal_search response must include a 'backend' field."""
         result = client.journal_search("ops")
-        assert "backend" in result, (
-            f"journal_search response missing 'backend' field: {result}"
-        )
+        assert "backend" in result, f"journal_search response missing 'backend' field: {result}"
         assert result["backend"] in ("postgres", "sqlite"), (
             f"Unexpected backend value: {result['backend']!r}"
         )
@@ -189,9 +176,7 @@ class TestJournalSearch:
         """journal_search with limit=1 must return at most 1 entry."""
         result = client.journal_search("the", limit=1)
         entries = result.get("entries", [])
-        assert len(entries) <= 1, (
-            f"journal_search with limit=1 returned {len(entries)} entries"
-        )
+        assert len(entries) <= 1, f"journal_search with limit=1 returned {len(entries)} entries"
 
     def test_count_matches_entries_length(self, client: LoreClient) -> None:
         """The 'count' field must equal the length of the 'entries' list."""
@@ -223,9 +208,7 @@ class TestTrustScore:
         )
         kb_id = result["kb_id"]
         entry = client.kb_get(kb_id)
-        assert "trust_score" in entry, (
-            f"kb_get response missing 'trust_score' field: {entry}"
-        )
+        assert "trust_score" in entry, f"kb_get response missing 'trust_score' field: {entry}"
         assert abs(entry["trust_score"] - 0.9) < 0.001, (
             f"Expected trust_score=0.9, got {entry['trust_score']}"
         )
@@ -242,9 +225,7 @@ class TestTrustScore:
         )
         kb_id = result["kb_id"]
         entry = client.kb_get(kb_id)
-        assert "trust_score" in entry, (
-            f"kb_get response missing 'trust_score' field: {entry}"
-        )
+        assert "trust_score" in entry, f"kb_get response missing 'trust_score' field: {entry}"
         assert abs(entry["trust_score"] - 0.3) < 0.001, (
             f"Expected trust_score=0.3, got {entry['trust_score']}"
         )
@@ -291,7 +272,9 @@ class TestTrustScore:
                 f"Low-trust entry {low_id!r} should be filtered by min_trust_score=0.5 "
                 f"but appeared in results: {returned_ids}"
             )
-            assert high_id in returned_ids, f"High-trust entry {high_id!r} should survive min_trust_score=0.5 filter"
+            assert high_id in returned_ids, (
+                f"High-trust entry {high_id!r} should survive min_trust_score=0.5 filter"
+            )
         finally:
             for eid in (low_id, high_id):
                 if eid:
@@ -300,9 +283,7 @@ class TestTrustScore:
                     except Exception as exc:  # noqa: BLE001
                         print(f"[cleanup] failed to delete {eid}: {exc}")
 
-    def test_kb_list_entries_have_trust_score(
-        self, client: LoreClient, cleanup_topic: str
-    ) -> None:
+    def test_kb_list_entries_have_trust_score(self, client: LoreClient, cleanup_topic: str) -> None:
         """Each entry returned by kb_list must include a trust_score field."""
         client.kb_add(
             topic=cleanup_topic,
@@ -312,17 +293,11 @@ class TestTrustScore:
         )
         result = client.kb_list(topic=cleanup_topic)
         entries = result.get("entries") or result.get("results") or []
-        assert len(entries) >= 1, (
-            f"kb_list returned no entries for topic {cleanup_topic!r}"
-        )
+        assert len(entries) >= 1, f"kb_list returned no entries for topic {cleanup_topic!r}"
         for entry in entries:
-            assert "trust_score" in entry, (
-                f"kb_list entry missing 'trust_score' field: {entry}"
-            )
+            assert "trust_score" in entry, f"kb_list entry missing 'trust_score' field: {entry}"
 
-    def test_default_trust_score_is_one(
-        self, client: LoreClient, cleanup_topic: str
-    ) -> None:
+    def test_default_trust_score_is_one(self, client: LoreClient, cleanup_topic: str) -> None:
         """An entry added without explicit trust_score must default to 1.0."""
         result = client.kb_add(
             topic=cleanup_topic,
@@ -333,6 +308,4 @@ class TestTrustScore:
         entry = client.kb_get(kb_id)
         trust = entry.get("trust_score")
         assert trust is not None, f"kb_get missing trust_score field: {entry}"
-        assert abs(trust - 1.0) < 0.001, (
-            f"Default trust_score should be 1.0, got {trust}"
-        )
+        assert abs(trust - 1.0) < 0.001, f"Default trust_score should be 1.0, got {trust}"

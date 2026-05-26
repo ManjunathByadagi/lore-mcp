@@ -528,11 +528,19 @@ def fetch_telemetry_stats(
                 {"session_id": session_id, "topic": topic},
             )
             row = cur.fetchone()
-            return dict(row) if row is not None else {
-                "total": 0, "with_feedback": 0, "requeries": 0,
-                "with_notes": 0, "avg_feedback_score": None,
-                "oldest": None, "newest": None
-            }
+            return (
+                dict(row)
+                if row is not None
+                else {
+                    "total": 0,
+                    "with_feedback": 0,
+                    "requeries": 0,
+                    "with_notes": 0,
+                    "avg_feedback_score": None,
+                    "oldest": None,
+                    "newest": None,
+                }
+            )
     finally:
         conn.close()
 
@@ -651,15 +659,25 @@ def refresh_hard_negative_pairs(
             behavioral_rows = cur.fetchall()
 
         for query_id, query_text, doc_id in explicit_rows:
-            upsert_params.append((
-                hard_negative_pair_id(query_text, doc_id),
-                query_text, doc_id, "explicit", json.dumps([query_id]),
-            ))
+            upsert_params.append(
+                (
+                    hard_negative_pair_id(query_text, doc_id),
+                    query_text,
+                    doc_id,
+                    "explicit",
+                    json.dumps([query_id]),
+                )
+            )
         for query_id, query_text, doc_id in behavioral_rows:
-            upsert_params.append((
-                hard_negative_pair_id(query_text, doc_id),
-                query_text, doc_id, "behavioral", json.dumps([query_id]),
-            ))
+            upsert_params.append(
+                (
+                    hard_negative_pair_id(query_text, doc_id),
+                    query_text,
+                    doc_id,
+                    "behavioral",
+                    json.dumps([query_id]),
+                )
+            )
 
         processed = len(explicit_rows) + len(behavioral_rows)
 
@@ -739,12 +757,7 @@ def fetch_hard_negatives(
         params.append(doc_id)
     if query_text_like is not None:
         # Escape ILIKE special characters so user input is treated as literals
-        escaped = (
-            query_text_like
-            .replace("\\", "\\\\")
-            .replace("%", "\\%")
-            .replace("_", "\\_")
-        )
+        escaped = query_text_like.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like_param = f"%{escaped}%"
         clauses.append("query_text ILIKE %s ESCAPE '\\'")
         params.append(like_param)
@@ -764,9 +777,7 @@ def fetch_hard_negatives(
                 cur.execute(sql, tuple(params))
                 return [dict(row) for row in cur.fetchall()]
             except psycopg2.errors.UndefinedTable:
-                logger.debug(
-                    "hard_negative_pairs table does not exist yet; returning empty list"
-                )
+                logger.debug("hard_negative_pairs table does not exist yet; returning empty list")
                 return []
     finally:
         conn.close()
@@ -798,7 +809,9 @@ def reranking_enabled() -> bool:
     return os.environ.get("LORE_RERANKING_ENABLED", "").lower() in ("1", "true", "yes")
 
 
-def fetch_reranking_bad_docs(query_embedding: list, db, cosine_threshold: float = 0.15) -> list[str]:
+def fetch_reranking_bad_docs(
+    query_embedding: list, db, cosine_threshold: float = 0.15
+) -> list[str]:
     """Returns doc_ids that were historically poor matches for queries similar to the current one.
 
     Uses hard_negative_pairs as the source (pre-aggregated quality signal)

@@ -230,8 +230,7 @@ def kb_list(topic: str | None = None, limit: int = 100, offset: int = 0) -> str:
 
 @mcp.tool(
     description=(
-        "Update existing KB entry content, title, topic, tags, verified state, "
-        "and trust_score"
+        "Update existing KB entry content, title, topic, tags, verified state, and trust_score"
     )
 )
 def kb_update(
@@ -616,43 +615,51 @@ def get_telemetry_stats(session_id: str | None = None, topic: str | None = None)
 # --- Hard Negative Mining (Issue #5 Phase 3) (2) ---------------------------
 
 
-@mcp.tool(description=(
-    "Scan retrieval_telemetry for low-scored and requery signals, then upsert "
-    "hard negative pairs into knowledge.hard_negative_pairs. Use since= for "
-    "incremental refresh. dry_run=true returns counts without writing. "
-    "Requires LORE_HARD_NEGATIVE_MINING=true."
-))
+@mcp.tool(
+    description=(
+        "Scan retrieval_telemetry for low-scored and requery signals, then upsert "
+        "hard negative pairs into knowledge.hard_negative_pairs. Use since= for "
+        "incremental refresh. dry_run=true returns counts without writing. "
+        "Requires LORE_HARD_NEGATIVE_MINING=true."
+    )
+)
 def refresh_hard_negatives(since: str | None = None, dry_run: bool = False) -> str:
     return _json(_srv.handle_refresh_hard_negatives(since=since, dry_run=dry_run))
 
 
-@mcp.tool(description=(
-    "Read hard negative (query, document) pairs from knowledge.hard_negative_pairs. "
-    "Filter by signal_type (explicit/behavioral/all), doc_id, or query_text_like. "
-    "Returns pairs sorted by occurrence_count DESC."
-))
+@mcp.tool(
+    description=(
+        "Read hard negative (query, document) pairs from knowledge.hard_negative_pairs. "
+        "Filter by signal_type (explicit/behavioral/all), doc_id, or query_text_like. "
+        "Returns pairs sorted by occurrence_count DESC."
+    )
+)
 def get_hard_negatives(
     signal_type: str | None = None,
     limit: int = 100,
     doc_id: str | None = None,
     query_text_like: str | None = None,
 ) -> str:
-    return _json(_srv.handle_get_hard_negatives(
-        signal_type=signal_type, limit=limit,
-        doc_id=doc_id, query_text_like=query_text_like))
+    return _json(
+        _srv.handle_get_hard_negatives(
+            signal_type=signal_type, limit=limit, doc_id=doc_id, query_text_like=query_text_like
+        )
+    )
 
 
 # --- Query Embedding Backfill (Issue #5 Phase 4a) (1) ----------------------
 
 
-@mcp.tool(description=(
-    "Backfill query_embedding column in retrieval_telemetry for rows that "
-    "predate Phase 4a. Processes rows in batches. Set build_index=true to also "
-    "create the HNSW index after backfill."
-))
+@mcp.tool(
+    description=(
+        "Backfill query_embedding column in retrieval_telemetry for rows that "
+        "predate Phase 4a. Processes rows in batches. Set build_index=true to also "
+        "create the HNSW index after backfill."
+    )
+)
 def backfill_query_embeddings(
-    batch_size: int = 32,   # Rows per batch (1–200, default 32)
-    limit: int = 1000,      # Max rows to process (1–10000, default 1000)
+    batch_size: int = 32,  # Rows per batch (1–200, default 32)
+    limit: int = 1000,  # Max rows to process (1–10000, default 1000)
     dry_run: bool = False,
     build_index: bool = False,
 ) -> str:
@@ -662,12 +669,16 @@ def backfill_query_embeddings(
     values outside that range (including 0) cannot drive the batch loop with
     LIMIT 0 / an empty batch.
     """
-    return _json(_srv.handle_backfill_query_embeddings({
-        "batch_size": batch_size,
-        "limit": limit,
-        "dry_run": dry_run,
-        "build_index": build_index,
-    }))
+    return _json(
+        _srv.handle_backfill_query_embeddings(
+            {
+                "batch_size": batch_size,
+                "limit": limit,
+                "dry_run": dry_run,
+                "build_index": build_index,
+            }
+        )
+    )
 
 
 # ===========================================================================
