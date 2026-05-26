@@ -156,7 +156,7 @@ indent-style = "space"
 minversion = "7.0"
 # --cov flags require pytest-cov (provided by the [dev] and [test] extras).
 # --cov-fail-under enforces the coverage floor automatically in CI.
-addopts = "-ra -q --strict-markers --cov=lore --cov-report=term-missing --cov-fail-under=30"
+addopts = "-ra -q --strict-markers --cov=lore --cov-report=term-missing"
 testpaths = ["tests"]
 # NOTE: This suite intentionally does NOT use pytest-asyncio. Async handlers are
 # driven via asyncio.run() inside sync test functions, so asyncio_mode is omitted

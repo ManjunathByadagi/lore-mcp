@@ -19,7 +19,7 @@ from .client import LoreClient
 
 # Tag every test in this module as e2e so the suite can be filtered with
 # `-m "not e2e"` in addition to the LORE_E2E_URL env gate in conftest.py.
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.timeout(300)]
 
 
 def _coverage_pct(status: dict) -> float | None:
