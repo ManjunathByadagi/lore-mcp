@@ -82,7 +82,7 @@
   topic: database
   title: "PostgreSQL table bloat and VACUUM tuning"
   content: |
-    Dead tuples accumulate between autovacuum runs, inflating table size.
+    Dead tuples accumulate between autovacuum runs in postgres, inflating table size.
     Monitor with pg_stat_user_tables.n_dead_tup.  Force an immediate cleanup:
       VACUUM (VERBOSE, ANALYZE) public.kb_entries;
     Tune autovacuum_vacuum_scale_factor down to 0.01 for write-heavy tables.
