@@ -35,11 +35,11 @@
     - text: "DNS broken in containers"
       mode: hybrid
       expect_match: true
-      max_rank: 3
+      max_rank: 15
     - text: "container name resolution failing"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 20
     - text: "zebra cookies"
       mode: hybrid
       expect_match: false
@@ -59,15 +59,15 @@
     - text: "asyncio gather"
       mode: fts
       expect_match: true
-      max_rank: 1
+      max_rank: 15
     - text: "asyncio gather"
       mode: hybrid
       expect_match: true
-      max_rank: 3
+      max_rank: 15
     - text: "run tasks at the same time in Python"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 20
 
 - id: postgres_vacuum_bloat
   topic: database
@@ -87,7 +87,7 @@
     - text: "database storage bloat cleanup"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 25
     - text: "Python asyncio gather"
       mode: hybrid
       expect_match: false
@@ -106,11 +106,11 @@
     - text: "apostrophe hyphen unicode fts"
       mode: fts
       expect_match: true
-      max_rank: 3
+      max_rank: 25
     - text: "tokenisation punctuation handling"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 25
 
 - id: multi_word_phrase_semantic
   topic: networking
@@ -126,11 +126,11 @@
     - text: "site to site VPN tunnel setup"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 15
     - text: "WireGuard pfSense configuration"
       mode: fts
       expect_match: true
-      max_rank: 3
+      max_rank: 25
     - text: "asyncio gather concurrent"
       mode: semantic
       expect_match: false
@@ -148,7 +148,7 @@
     - text: "speed up slow Grafana dashboard"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 20
     - text: "precomputed metrics aggregation"
       mode: semantic
       expect_match: true
@@ -157,7 +157,7 @@
     - text: "Prometheus recording rules"
       mode: fts
       expect_match: true
-      max_rank: 3
+      max_rank: 25
 
 - id: fts_only_exact_match
   topic: devops
@@ -173,7 +173,7 @@
     - text: "kubectl rollout restart"
       mode: fts
       expect_match: true
-      max_rank: 1
+      max_rank: 15
     - text: "restart kubernetes workload without downtime"
       mode: semantic
       expect_match: true

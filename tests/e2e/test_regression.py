@@ -99,8 +99,10 @@ class TestRegressionCorpus:
         )
         seeded_id: str = add_result["kb_id"]
 
-        # Brief pause to allow embeddings to be computed (may be async on server)
-        time.sleep(0.5)
+        # Brief pause to allow FTS index and embeddings to settle after seeding.
+        # 2 s is sufficient for the FTS write-ahead log to flush on the staging
+        # server; shorter waits caused empty results for postgres_vacuum_bloat/q0.
+        time.sleep(2)
 
         self._seeded_id = seeded_id
         self._topic = topic
@@ -133,7 +135,9 @@ class TestRegressionCorpus:
         # prior runs can affect rank; teardown in _seed_and_cleanup prevents
         # accumulation across runs.  If rank instability appears, consider
         # passing topic=self._topic to kb_search once the server supports it.
-        result = client.kb_search(q_text, search_mode=mode, top_k=max(20, _TOP_N_FALSE_NEG))
+        # top_k must cover the highest max_rank in the corpus (currently 25) and
+        # the false-negative inspection window (_TOP_N_FALSE_NEG).
+        result = client.kb_search(q_text, search_mode=mode, top_k=max(25, _TOP_N_FALSE_NEG))
         results = _get_results(result)
         rank = _find_rank(results, self._seeded_id)
 

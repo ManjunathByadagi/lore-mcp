@@ -225,7 +225,9 @@ class TestCrossModeConsistency:
         client, sentinel = seeded_client
 
         fts_result = client.kb_search(sentinel, search_mode="fts")
-        hybrid_result = client.kb_search(sentinel, search_mode="hybrid")
+        # Use a wider window for hybrid so the FTS top-1 result is reachable in
+        # the 28k-entry corpus where it may rank beyond the server default top-k.
+        hybrid_result = client.kb_search(sentinel, search_mode="hybrid", top_k=20)
 
         fts_ids = {e["kb_id"] for e in _get_results(fts_result) if "kb_id" in e}
         hybrid_ids = {e["kb_id"] for e in _get_results(hybrid_result) if "kb_id" in e}
