@@ -16,8 +16,10 @@ from lore import (
 )
 
 
-def _provider(mock_client, session_id="sess-1"):
-    p = LoreMemoryProvider(config={"lore_url": "http://test"})
+def _provider(mock_client, session_id="sess-1", write_frequency="session"):
+    # Default these tests to write_frequency "session" so turns buffer until
+    # on_session_end; per-turn flush behavior is covered separately below.
+    p = LoreMemoryProvider(config={"lore_url": "http://test", "write_frequency": write_frequency})
     p._client = mock_client
     p._session_id = session_id
     return p
@@ -139,3 +141,94 @@ def test_on_session_end_does_not_call_llm(mock_client):
     # only kb_add/kb_search were used.
     p.on_session_end(messages=[])
     assert len(mock_client.added) == 1
+
+
+def test_on_session_end_swallows_persist_exception(mock_client):
+    # HIGH #1: on_session_end must NOT propagate exceptions into the agent.
+    # If _persist_turns raises (e.g. Lore returns HTTP 5xx after the health
+    # check passed), on_session_end should swallow it and still clear the
+    # buffer, never raising into the Hermes agent process.
+    p = _provider(mock_client)
+    p.sync_turn("u", "a")
+
+    def _boom() -> None:
+        raise RuntimeError("simulated Lore 5xx during flush")
+
+    p._persist_turns = _boom  # type: ignore[method-assign]
+
+    # Must not raise.
+    p.on_session_end(messages=[])
+
+    # Buffer is cleared even though persistence failed.
+    assert p._captured_turns == []
+
+
+# ---------------------------------------------------------------------------
+# write_frequency: "turn" — per-turn persistence (HIGH #2)
+# ---------------------------------------------------------------------------
+
+
+def test_write_frequency_turn_persists_each_turn(mock_client):
+    # With write_frequency "turn", each sync_turn flushes immediately.
+    # No dedup hit -> each flush adds a new entry.
+    mock_client.search_queue = [[], []]  # one empty probe per flush
+    p = _provider(mock_client, write_frequency="turn")
+    p.sync_turn("hello", "hi there")
+    assert len(mock_client.added) == 1
+    assert p._captured_turns == []  # buffer cleared after per-turn flush
+    p.sync_turn("bye", "goodbye")
+    assert len(mock_client.added) == 2
+    assert p._captured_turns == []
+
+
+def test_write_frequency_turn_is_provider_default(mock_client):
+    # The provider default (no explicit write_frequency in config) is "turn",
+    # matching the advertised config schema / module docstring.
+    mock_client.search_queue = [[]]
+    p = LoreMemoryProvider(config={"lore_url": "http://test"})
+    p._client = mock_client
+    p._session_id = "sess-1"
+    assert p._write_frequency == "turn"
+    p.sync_turn("u", "a")
+    assert len(mock_client.added) == 1
+    assert p._captured_turns == []
+
+
+def test_write_frequency_turn_does_not_double_persist_at_session_end(mock_client):
+    # After per-turn flushes the buffer is empty, so on_session_end is a no-op
+    # (no duplicate persistence of already-flushed turns).
+    mock_client.search_queue = [[], []]
+    p = _provider(mock_client, write_frequency="turn")
+    p.sync_turn("hello", "hi there")
+    p.sync_turn("bye", "goodbye")
+    added_before = len(mock_client.added)
+    p.on_session_end(messages=[])
+    assert len(mock_client.added) == added_before  # no extra add
+
+
+def test_write_frequency_turn_swallows_flush_exception(mock_client):
+    # Per-turn flush must never raise into the agent either.
+    p = _provider(mock_client, write_frequency="turn")
+
+    def _boom() -> None:
+        raise RuntimeError("simulated Lore 5xx during per-turn flush")
+
+    p._persist_turns = _boom  # type: ignore[method-assign]
+
+    # Must not raise.
+    p.sync_turn("u", "a")
+
+    # Buffer cleared despite failure.
+    assert p._captured_turns == []
+
+
+def test_write_frequency_session_buffers_until_session_end(mock_client):
+    # With write_frequency "session", turns buffer and only flush at end.
+    mock_client.search_queue = [[]]
+    p = _provider(mock_client, write_frequency="session")
+    p.sync_turn("hello", "hi there")
+    p.sync_turn("bye", "goodbye")
+    assert len(mock_client.added) == 0  # nothing persisted yet
+    assert len(p._captured_turns) == 2
+    p.on_session_end(messages=[])
+    assert len(mock_client.added) == 1  # single combined entry

@@ -100,8 +100,31 @@ def test_missing_rrf_score_treated_as_dissimilar(mock_client):
     assert result["action"] == "added"
 
 
-def test_unavailable_client_skips_dedup_and_returns_skipped(unavailable_client):
-    result = add_or_update(unavailable_client, topic="t", title="x", content="c")
-    assert result["action"] == "skipped"
-    assert len(unavailable_client.added) == 0
-    assert len(unavailable_client.updated) == 0
+def test_dedup_probe_failure_falls_back_to_add():
+    # LOW finding: add_or_update no longer does a pre-flight is_available()
+    # /health GET. It trusts the exception-based error handling — when the
+    # dedup probe (kb_search) raises, it falls back to a plain add rather
+    # than crashing.
+    from lore.tests.conftest import MockLoreClient
+
+    client = MockLoreClient(search_raises=True)
+    result = add_or_update(client, topic="t", title="x", content="c")
+    assert result["action"] == "added"
+    assert len(client.added) == 1
+    assert len(client.updated) == 0
+
+
+def test_add_or_update_does_not_call_is_available(mock_client):
+    # LOW finding: confirm the redundant /health pre-check was removed —
+    # add_or_update must not invoke client.is_available() on the write path.
+    called = {"is_available": False}
+    original = mock_client.is_available
+
+    def _tracked() -> bool:
+        called["is_available"] = True
+        return original()
+
+    mock_client.is_available = _tracked  # type: ignore[method-assign]
+    mock_client.search_queue = [[]]
+    add_or_update(mock_client, topic="t", title="x", content="c")
+    assert called["is_available"] is False

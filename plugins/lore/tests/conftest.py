@@ -41,8 +41,12 @@ class MockLoreClient:
     prefetch, and turn-capture logic can be exercised without network I/O.
     """
 
-    def __init__(self, *, available: bool = True):
+    def __init__(self, *, available: bool = True, search_raises: bool = False):
         self._available = available
+        # When True, kb_search raises to simulate a transport/HTTP error
+        # (as the real LoreClient does via raise_for_status). Exercises the
+        # dedup-probe fallback-to-add path.
+        self._search_raises = search_raises
         self.added: list[dict[str, Any]] = []
         self.updated: list[dict[str, Any]] = []
         self.search_calls: list[dict[str, Any]] = []
@@ -58,6 +62,8 @@ class MockLoreClient:
         self.search_calls.append(
             {"query": query, "search_mode": search_mode, "topic": topic, "top_k": top_k}
         )
+        if self._search_raises:
+            raise RuntimeError("simulated Lore transport error")
         if self.search_queue:
             return self.search_queue.pop(0)
         return []

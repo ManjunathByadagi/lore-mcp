@@ -102,14 +102,24 @@ class LoreClient:
 
     @staticmethod
     def _parse_mcp_body(text: str) -> dict[str, Any]:
-        """Parse a StreamableHTTP body: plain JSON or SSE ``data:`` frame."""
+        """Parse a StreamableHTTP body: plain JSON or SSE ``data:`` frame.
+
+        Collects all ``data:`` lines and returns the LAST non-empty one.
+        Lore may emit progress/heartbeat events before the terminal result;
+        the final frame carries the actual tool result.
+        """
         text = text.strip()
         if text.startswith("{"):
             return json.loads(text)
+        last_data: str | None = None
         for line in text.splitlines():
             line = line.strip()
             if line.startswith("data:"):
-                return json.loads(line[5:].strip())
+                chunk = line[5:].strip()
+                if chunk:
+                    last_data = chunk
+        if last_data is not None:
+            return json.loads(last_data)
         raise RuntimeError("Unrecognized MCP response body")
 
     @staticmethod
@@ -206,15 +216,15 @@ def add_or_update(
     Probes Lore with a hybrid search for the content. If the top hit's
     ``rrf_score`` is at or above ``threshold`` (higher = more similar in
     hybrid mode), the existing entry is updated rather than creating a
-    near-duplicate. Degrades gracefully: if Lore is unreachable, returns
-    {"action": "skipped"} without raising.
+    near-duplicate. Degrades gracefully: if the dedup probe fails (Lore
+    unreachable / transport error), falls back to a plain add.
 
-    Returns a dict with ``action`` in {"added", "updated", "skipped"} and,
-    for added/updated, the ``kb_id``.
+    No pre-flight ``is_available()`` /health GET: ``_call_tool`` already does
+    ``raise_for_status()`` and errors propagate to the caller, so the extra
+    round-trip on every write path is unnecessary.
+
+    Returns a dict with ``action`` in {"added", "updated"} and the ``kb_id``.
     """
-    if not client.is_available():
-        return {"action": "skipped", "reason": "lore_unavailable"}
-
     try:
         hits = client.kb_search(content, search_mode="hybrid", topic=topic, top_k=3)
     except Exception as exc:  # noqa: BLE001 - dedup probe is best-effort

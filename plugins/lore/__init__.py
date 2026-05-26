@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -241,7 +241,7 @@ class LoreMemoryProvider(MemoryProvider):
     # -- write ---------------------------------------------------------------
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        # Capture raw turn for end-of-session persistence. No LLM call.
+        # Capture raw turn for persistence. No LLM call.
         # Strip injected memory so recalled context is never re-stored.
         user_clean = strip_memory_fence(user_content or "").strip()
         assistant_clean = (assistant_content or "").strip()
@@ -255,12 +255,24 @@ class LoreMemoryProvider(MemoryProvider):
                 "assistant": assistant_clean,
             }
         )
+        # write_frequency "turn": persist immediately after each turn.
+        # "session" (or any other value): defer until on_session_end. Never
+        # raise into the agent — persistence is best-effort.
+        if self._write_frequency == "turn":
+            try:
+                self._persist_turns()
+            except Exception as exc:  # noqa: BLE001 - never raise into the agent
+                logger.debug("Lore per-turn flush failed: %s", exc)
+            finally:
+                self._captured_turns = []
 
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:
         if not self._captured_turns:
             return
         try:
             self._persist_turns()
+        except Exception as exc:  # noqa: BLE001 - never raise into the agent
+            logger.debug("Lore on_session_end flush failed: %s", exc)
         finally:
             self._captured_turns = []
 
