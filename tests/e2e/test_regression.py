@@ -130,16 +130,14 @@ class TestRegressionCorpus:
         expect_match: bool = query.get("expect_match", True)
         max_rank: int | None = query.get("max_rank")
 
-        # NOTE: searches are intentionally global (no topic filter) to mirror
-        # real-world recall conditions.  Competing entries from other tests or
-        # prior runs can affect rank; teardown in _seed_and_cleanup prevents
-        # accumulation across runs.  If rank instability appears, consider
-        # passing topic=self._topic to kb_search once the server supports it.
-        # top_k must cover this query's own max_rank (so a future entry with
-        # max_rank > 25 still gets a wide enough window), the false-negative
-        # inspection window (_TOP_N_FALSE_NEG), and a sane floor of 25.
-        top_k = max(max_rank or 0, _TOP_N_FALSE_NEG, 25)
-        result = client.kb_search(q_text, search_mode=mode, top_k=top_k)
+        # Searches are topic-scoped so the seeded entry only competes against
+        # itself — making rank assertions deterministic regardless of how many
+        # entries exist in the broader database.  self._topic is a UUID-suffixed
+        # slug that is unique per parametrised test run (set in _seed_and_cleanup).
+        # top_k must cover this query's own max_rank and the false-negative
+        # inspection window (_TOP_N_FALSE_NEG), with a sane floor of 10.
+        top_k = max(max_rank or 0, _TOP_N_FALSE_NEG, 10)
+        result = client.kb_search(q_text, search_mode=mode, top_k=top_k, topic=self._topic)
         results = _get_results(result)
         rank = _find_rank(results, self._seeded_id)
 
