@@ -245,7 +245,7 @@ class LoreClient:
         Returns:
             Unwrapped update-result dict.
         """
-        return self.tool("kb_update", {"entry_id": kb_id, **kw})
+        return self.tool("kb_update", {"kb_id": kb_id, **kw})
 
     def kb_delete(self, kb_id: str, confirm: bool = True) -> dict[str, Any]:
         """Delete a knowledge-base entry.
@@ -257,7 +257,7 @@ class LoreClient:
         Returns:
             Unwrapped deletion-confirmation dict.
         """
-        return self.tool("kb_delete", {"entry_id": kb_id, "confirm": confirm})
+        return self.tool("kb_delete", {"kb_id": kb_id, "confirm": confirm})
 
     def kb_list(self, **kw: Any) -> dict[str, Any]:
         """List knowledge-base entries.
@@ -269,6 +269,28 @@ class LoreClient:
             Unwrapped list-result dict with ``entries`` list.
         """
         return self.tool("kb_list", {**kw})
+
+    # ------------------------------------------------------------------
+    # Journal convenience wrappers
+    # ------------------------------------------------------------------
+
+    def journal_search(self, query: str, **kw: Any) -> dict[str, Any]:
+        """Search journal entries by content.
+
+        Args:
+            query: Free-text search query.
+            **kw: Optional overrides: ``limit``, ``entry_type``,
+                  ``date_from`` (``YYYY-MM-DD``), ``date_to`` (``YYYY-MM-DD``).
+
+        Returns:
+            Unwrapped result dict with ``entries`` list, ``count``,
+            ``search_mode``, and ``backend`` fields.
+        """
+        return self.tool("journal_search", {"query": query, **kw})
+
+    # ------------------------------------------------------------------
+    # Embedding helpers
+    # ------------------------------------------------------------------
 
     def kb_embedding_status(self) -> dict[str, Any]:
         """Return the current embedding-coverage status report.

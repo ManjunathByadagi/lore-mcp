@@ -164,6 +164,7 @@ def kb_add(
     tags: str | list[str] | None = None,
     author: str | None = None,
     source_type: str | None = None,
+    trust_score: float = 1.0,
 ) -> str:
     return _json(
         _srv.handle_kb_add(
@@ -173,6 +174,7 @@ def kb_add(
             tags=_coerce_tags(tags),
             author=author,
             source_type=source_type,
+            trust_score=trust_score,
         )
     )
 
@@ -195,6 +197,8 @@ def kb_search(
     parent_query_id: str | None = None,
     required_requery: bool = False,
     caller_agent: str | None = None,
+    min_trust_score: float | None = None,
+    min_score: float | None = None,
 ) -> str:
     return _json(
         _srv.handle_kb_search(
@@ -208,6 +212,8 @@ def kb_search(
             parent_query_id=parent_query_id,
             required_requery=required_requery,
             caller_agent=caller_agent,
+            min_trust_score=min_trust_score,
+            min_score=min_score,
         )
     )
 
@@ -222,7 +228,12 @@ def kb_list(topic: str | None = None, limit: int = 100, offset: int = 0) -> str:
     return _json(_srv.handle_kb_list(topic=topic, limit=limit, offset=offset))
 
 
-@mcp.tool(description="Update existing KB entry content, title, topic, tags, and verified state")
+@mcp.tool(
+    description=(
+        "Update existing KB entry content, title, topic, tags, verified state, "
+        "and trust_score"
+    )
+)
 def kb_update(
     kb_id: str,
     content: str | None = None,
@@ -230,9 +241,11 @@ def kb_update(
     tags: str | list[str] | None = None,
     topic: str | None = None,
     verified: bool | None = _VERIFIED_SENTINEL,
+    trust_score: float | None = None,
 ) -> str:
     # Preserve the sentinel semantics: only forward ``verified`` when the
-    # client actually supplied it (so omission != reset-to-null).
+    # client actually supplied it (so omission != reset-to-null). trust_score
+    # uses None as its "unchanged" sentinel (handled in handle_kb_update).
     return _json(
         _srv.handle_kb_update(
             kb_id=kb_id,
@@ -241,6 +254,7 @@ def kb_update(
             tags=_coerce_tags(tags),
             topic=topic,
             verified=verified,
+            trust_score=trust_score,
         )
     )
 
@@ -306,7 +320,7 @@ def investigation_list_experiments() -> str:
     return _json(_srv.handle_investigation_list_experiments())
 
 
-# --- Journal (4) -----------------------------------------------------------
+# --- Journal (5) -----------------------------------------------------------
 
 
 @mcp.tool(description="Append journal entry")
@@ -328,6 +342,25 @@ def journal_list(limit: int = 20) -> str:
 @mcp.tool(description="Get journal entry")
 def journal_get(entry_id: str) -> str:
     return _json(_srv.handle_journal_get(entry_id=entry_id))
+
+
+@mcp.tool(description="Full-text search across journal entry content (Issue #15)")
+def journal_search(
+    query: str,
+    limit: int = 20,
+    entry_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str:
+    return _json(
+        _srv.handle_journal_search(
+            query=query,
+            limit=limit,
+            entry_type=entry_type,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )
 
 
 @mcp.tool(description="Snapshot current config")

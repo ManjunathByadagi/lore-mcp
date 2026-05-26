@@ -3,9 +3,18 @@
 # Each entry seeds a KB article then runs one or more queries against it,
 # asserting rank and match expectations.
 #
+# TOPIC SCOPING
+# -------------
+# Each test run seeds its entry under a UUID-suffixed topic
+# (e.g. "e2e-regression-ops-a3f8c21b") so the seeded entry is the ONLY
+# document in that topic.  Searches are filtered to that topic, meaning the
+# seeded entry only competes against itself — making rank assertions
+# deterministic regardless of how many entries exist in the broader database.
+# max_rank thresholds reflect this: FTS exact-match → 1, semantic → 2–3.
+#
 # Schema per entry:
 #   id:        unique slug used as the entry's title prefix for traceability
-#   topic:     KB topic to file under (automatically prefixed with "e2e-regression-")
+#   topic:     KB topic category (automatically suffixed with a UUID in tests)
 #   title:     article title
 #   content:   article body (plain text)
 #   queries:
@@ -35,11 +44,11 @@
     - text: "DNS broken in containers"
       mode: hybrid
       expect_match: true
-      max_rank: 3
+      max_rank: 2
     - text: "container name resolution failing"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 3
     - text: "zebra cookies"
       mode: hybrid
       expect_match: false
@@ -63,17 +72,17 @@
     - text: "asyncio gather"
       mode: hybrid
       expect_match: true
-      max_rank: 3
+      max_rank: 2
     - text: "run tasks at the same time in Python"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 3
 
 - id: postgres_vacuum_bloat
   topic: database
   title: "PostgreSQL table bloat and VACUUM tuning"
   content: |
-    Dead tuples accumulate between autovacuum runs, inflating table size.
+    Dead tuples accumulate between autovacuum runs in postgres, inflating table size.
     Monitor with pg_stat_user_tables.n_dead_tup.  Force an immediate cleanup:
       VACUUM (VERBOSE, ANALYZE) public.kb_entries;
     Tune autovacuum_vacuum_scale_factor down to 0.01 for write-heavy tables.
@@ -83,11 +92,11 @@
     - text: "vacuum dead tuples postgres"
       mode: fts
       expect_match: true
-      max_rank: 2
+      max_rank: 1
     - text: "database storage bloat cleanup"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 3
     - text: "Python asyncio gather"
       mode: hybrid
       expect_match: false
@@ -103,14 +112,19 @@
     café produce identical tokens.  Test queries with special chars to
     avoid silent mismatches in recall metrics.
   queries:
-    - text: "apostrophe hyphen unicode fts"
+    # "fts" only appears in the body as "FTS"/"FTS5" (upper-case / compound),
+    # so an "fts" FTS query depends on tokenizer case-folding behaviour we don't
+    # control on staging. Use "tokenisation" instead — it appears literally in
+    # lower-case in the body ("...before tokenisation, so café...") so this query
+    # matches regardless of how the tokenizer case-folds.
+    - text: "apostrophe hyphen unicode tokenisation"
       mode: fts
       expect_match: true
-      max_rank: 3
+      max_rank: 1
     - text: "tokenisation punctuation handling"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 2
 
 - id: multi_word_phrase_semantic
   topic: networking
@@ -126,11 +140,11 @@
     - text: "site to site VPN tunnel setup"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 2
     - text: "WireGuard pfSense configuration"
       mode: fts
       expect_match: true
-      max_rank: 3
+      max_rank: 1
     - text: "asyncio gather concurrent"
       mode: semantic
       expect_match: false
@@ -148,16 +162,16 @@
     - text: "speed up slow Grafana dashboard"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 2
     - text: "precomputed metrics aggregation"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 2
     # FTS on a paraphrase that shares no exact tokens — should still match via semantic
     - text: "Prometheus recording rules"
       mode: fts
       expect_match: true
-      max_rank: 3
+      max_rank: 1
 
 - id: fts_only_exact_match
   topic: devops
@@ -177,4 +191,4 @@
     - text: "restart kubernetes workload without downtime"
       mode: semantic
       expect_match: true
-      max_rank: 5
+      max_rank: 2

@@ -22,6 +22,10 @@ import yaml
 
 from .client import LoreClient
 
+# Tag every test in this module as e2e so the suite can be filtered with
+# `-m "not e2e"` in addition to the LORE_E2E_URL env gate in conftest.py.
+pytestmark = pytest.mark.e2e
+
 # ---------------------------------------------------------------------------
 # Corpus loading
 # ---------------------------------------------------------------------------
@@ -95,19 +99,23 @@ class TestRegressionCorpus:
         )
         seeded_id: str = add_result["kb_id"]
 
-        # Brief pause to allow embeddings to be computed (may be async on server)
-        time.sleep(0.5)
+        # Brief pause to allow FTS index and embeddings to settle after seeding.
+        # 2 s is sufficient for the FTS write-ahead log to flush on the staging
+        # server; shorter waits caused empty results for postgres_vacuum_bloat/q0.
+        time.sleep(2)
 
         self._seeded_id = seeded_id
         self._topic = topic
 
         yield
 
-        # Cleanup — best effort
+        # Cleanup — best effort so teardown failures don't mask test failures.
+        # Without cleanup, seeded entries accumulate across runs and can degrade
+        # rank-based assertions by inflating the result set with stale content.
         try:
             client.kb_delete(seeded_id, confirm=True)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cleanup] failed to delete seeded entry {seeded_id!r}: {exc}")
 
     @pytest.mark.parametrize("entry,query", _collect_params())
     def test_corpus_query(
@@ -122,7 +130,18 @@ class TestRegressionCorpus:
         expect_match: bool = query.get("expect_match", True)
         max_rank: int | None = query.get("max_rank")
 
-        result = client.kb_search(q_text, search_mode=mode, top_k=max(20, _TOP_N_FALSE_NEG))
+        # Topic-scope positive queries so the seeded entry only competes against
+        # itself — making rank assertions deterministic regardless of how many
+        # entries exist in the broader database.  self._topic is a UUID-suffixed
+        # slug that is unique per parametrised test run (set in _seed_and_cleanup).
+        # False-negative queries must run against the full corpus — a single-document
+        # topic always returns that document, making "should NOT appear" checks
+        # meaningless (vacuously pass or fail non-deterministically).
+        # top_k must cover this query's own max_rank and the false-negative
+        # inspection window (_TOP_N_FALSE_NEG), with a sane floor of 10.
+        top_k = max(max_rank or 0, _TOP_N_FALSE_NEG, 10)
+        topic_filter = self._topic if expect_match else None
+        result = client.kb_search(q_text, search_mode=mode, top_k=top_k, topic=topic_filter)
         results = _get_results(result)
         rank = _find_rank(results, self._seeded_id)
 

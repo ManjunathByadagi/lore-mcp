@@ -110,7 +110,8 @@ def fts5_search_sqlite(
 
     Returns rows ordered by FTS5 ``bm25()`` score (lower = better match).
     Each row is a dict with ``kb_id``, ``title``, ``content``, ``topic``,
-    ``tags``, ``author``, ``source_type``, ``verified``, and ``score``.
+    ``tags``, ``author``, ``source_type``, ``verified``, ``trust_score``, and
+    ``score``.
     """
     if not getattr(db_client, "fts5_available", False):
         return []
@@ -120,7 +121,8 @@ def fts5_search_sqlite(
     # bm25() returns the BM25 ranking score (lower is better).
     sql = (
         "SELECT k.kb_id, k.title, k.content, k.topic, k.tags, k.author, "
-        "       k.source_type, k.verified, bm25(knowledge_kb_entries_fts) AS score "
+        "       k.source_type, k.verified, k.trust_score, "
+        "       bm25(knowledge_kb_entries_fts) AS score "
         "FROM knowledge_kb_entries_fts f "
         "JOIN knowledge_kb_entries k ON k.rowid = f.rowid "
         "WHERE knowledge_kb_entries_fts MATCH ?"
@@ -181,7 +183,7 @@ def vector_search_sqlite(
     # `WHERE embedding MATCH ? AND k = ?`.
     sql = (
         "SELECT v.kb_id, v.distance, k.title, k.content, k.topic, k.tags, "
-        "       k.author, k.source_type, k.verified "
+        "       k.author, k.source_type, k.verified, k.trust_score "
         "FROM knowledge_kb_vec_embeddings v "
         "JOIN knowledge_kb_entries k ON k.kb_id = v.kb_id "
         "WHERE v.embedding MATCH ? AND k = ?"
@@ -255,22 +257,26 @@ def fts_search_postgres(
     # e.g. "asyncio gather" matches content containing "asyncio.gather".
     sql = (
         "SELECT kb_id, title, topic, tags, author, source_type, verified, "
+        "       trust_score, "
         "       ts_rank_cd("
         "           to_tsvector('english', "
         "               coalesce(title,'') || ' ' || coalesce(content,'')), "
         "           websearch_to_tsquery('english', %s)"
         "       ) AS score "
         "FROM knowledge.kb_entries "
-        "WHERE to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')) "
-        "      @@ websearch_to_tsquery('english', %s) "
-        "   OR to_tsvector('simple', regexp_replace("
+        "WHERE ("
+        "    to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')) "
+        "    @@ websearch_to_tsquery('english', %s) "
+        "    OR to_tsvector('simple', regexp_replace("
         "               coalesce(title,'') || ' ' || coalesce(content,''),"
         "               '[.,/\\\\:_-]', ' ', 'g')) "
-        "      @@ plainto_tsquery('simple', regexp_replace(%s,"
+        "       @@ plainto_tsquery('simple', regexp_replace(%s,"
         "               '[.,/\\\\:_-]', ' ', 'g'))"
+        ")"
     )
     params: list[Any] = [query, query, query]
     if topic:
+        # AND applies to the entire OR expression because it is parenthesised above.
         sql += " AND topic = %s"
         params.append(topic)
     sql += " ORDER BY score DESC NULLS LAST LIMIT %s"
@@ -317,7 +323,7 @@ def vector_search_postgres(
     sql = (
         f"WITH q AS (SELECT %s::{vt} AS qvec) "
         "SELECT e.kb_id, e.title, e.topic, e.tags, e.author, e.source_type, "
-        "       e.verified, "
+        "       e.verified, e.trust_score, "
         "       (em.embedding <=> q.qvec) AS distance "
         "FROM knowledge.kb_embeddings em "
         "JOIN knowledge.kb_entries e ON e.kb_id = em.kb_id "

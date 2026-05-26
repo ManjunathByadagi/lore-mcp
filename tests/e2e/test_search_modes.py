@@ -7,9 +7,15 @@ relevance — that is the job of ``test_regression.py``.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from .client import LoreClient
+
+# Tag every test in this module as e2e so the suite can be filtered with
+# `-m "not e2e"` in addition to the LORE_E2E_URL env gate in conftest.py.
+pytestmark = pytest.mark.e2e
 
 # Minimum number of results to expect when searching for content we just seeded
 _MIN_RESULTS = 1
@@ -32,6 +38,11 @@ def seeded_client(client: LoreClient, cleanup_topic: str) -> tuple[LoreClient, s
             "for a known-good query against recently added content."
         ),
     )
+    # Brief pause to allow the FTS index to settle after seeding. The SQLite FTS
+    # write-ahead log needs time to flush on the staging server; without this
+    # wait TestCrossModeConsistency races the FTS index and sees empty results.
+    # Matches the 2 s wait used in test_regression.py's _seed_and_cleanup.
+    time.sleep(2)
     return client, sentinel
 
 
@@ -221,7 +232,9 @@ class TestCrossModeConsistency:
         client, sentinel = seeded_client
 
         fts_result = client.kb_search(sentinel, search_mode="fts")
-        hybrid_result = client.kb_search(sentinel, search_mode="hybrid")
+        # Use a wider window for hybrid so the FTS top-1 result is reachable in
+        # the 28k-entry corpus where it may rank beyond the server default top-k.
+        hybrid_result = client.kb_search(sentinel, search_mode="hybrid", top_k=30)
 
         fts_ids = {e["kb_id"] for e in _get_results(fts_result) if "kb_id" in e}
         hybrid_ids = {e["kb_id"] for e in _get_results(hybrid_result) if "kb_id" in e}

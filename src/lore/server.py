@@ -249,6 +249,18 @@ _TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "Origin: 'human', 'agent', or 'system'. Optional, defaults to null.",
                 },
+                "trust_score": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "default": 1.0,
+                    "description": (
+                        "Confidence weight for this fact (0.0–1.0). Defaults to "
+                        "1.0 (fully trusted). Lower values mark low-confidence "
+                        "facts that callers can later exclude via kb_search's "
+                        "min_trust_score filter."
+                    ),
+                },
             },
             "required": ["topic", "title", "content"],
         },
@@ -320,6 +332,28 @@ _TOOL_DEFINITIONS = [
                         "(retrieval telemetry, issue #5)."
                     ),
                 },
+                "min_score": {
+                    "type": "number",
+                    "description": (
+                        "Minimum relevance score threshold. Results below this "
+                        "score are excluded. For hybrid mode uses rrf_score; for "
+                        "fts/semantic uses score. Range 0.0-1.0 for "
+                        "semantic/hybrid; unbounded for raw fts. Note: SQLite FTS5 "
+                        "uses bm25() scores which are negative (e.g. -1.5 to 0.0); "
+                        "set min_score to a negative value on the fts path, or use "
+                        "hybrid/semantic modes for intuitive 0.0-1.0 scoring."
+                    ),
+                },
+                "min_trust_score": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": (
+                        "Minimum trust score threshold (0.0–1.0). Excludes "
+                        "entries with trust_score below this value. Useful for "
+                        "filtering out deprecated or low-confidence facts."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -357,7 +391,10 @@ _TOOL_DEFINITIONS = [
     ),
     types.Tool(
         name="kb_update",
-        description="Update existing KB entry content, title, topic, tags, and verified state",
+        description=(
+            "Update existing KB entry content, title, topic, tags, verified "
+            "state, and trust_score"
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -373,6 +410,15 @@ _TOOL_DEFINITIONS = [
                 "verified": {
                     "type": ["boolean", "null"],
                     "description": "Mark entry as human-verified (true), disputed (false), or reset to unreviewed (null).",
+                },
+                "trust_score": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": (
+                        "Update the entry's confidence weight (0.0–1.0). Omit to "
+                        "leave the existing trust_score unchanged."
+                    ),
                 },
             },
             "required": ["kb_id"],
@@ -475,6 +521,38 @@ _TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {"entry_id": {"type": "string"}},
             "required": ["entry_id"],
+        },
+    ),
+    types.Tool(
+        name="journal_search",
+        description="Full-text search across journal entry content (Issue #15)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Full-text search query"},
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Max results",
+                },
+                "entry_type": {
+                    "type": "string",
+                    "description": "Filter by entry type (optional)",
+                },
+                "date_from": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "ISO date lower bound e.g. 2026-01-01 (optional)",
+                },
+                "date_to": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "ISO date upper bound (optional)",
+                },
+            },
+            "required": ["query"],
         },
     ),
     types.Tool(
@@ -1091,6 +1169,8 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
             return format_response(handle_journal_list(**arguments))
         elif name == "journal_get":
             return format_response(handle_journal_get(**arguments))
+        elif name == "journal_search":
+            return format_response(handle_journal_search(**arguments))
         elif name == "snapshot_config":
             return format_response(handle_snapshot_config(**arguments))
 
@@ -1443,12 +1523,26 @@ def handle_kb_add(
     tags: list = None,
     author: str = None,
     source_type: str = None,
+    trust_score: float = 1.0,
 ) -> dict:
     """Add KB entry.
 
     Optional attribution fields (author, source_type) support multi-agent
     provenance tracking. See `verified` flag (set via kb_update) for human review state.
+
+    ``trust_score`` (Issue #14) is a confidence signal in [0.0, 1.0] (default
+    1.0). Out-of-range values are rejected with an invalid_input envelope.
     """
+    # Issue #14: normalise None -> 1.0 on the add path. _validate_trust_score
+    # treats None as "not provided" (a passthrough for the kb_update path), but
+    # for kb_add a None would slip past validation and then crash at
+    # float(None). Defaulting here keeps the documented default of 1.0.
+    if trust_score is None:
+        trust_score = 1.0
+    # Issue #14: validate the confidence bound before touching the database.
+    err = _validate_trust_score(trust_score)
+    if err is not None:
+        return err
     try:
         kb_id = f"kb_{uuid.uuid4().hex[:12]}"
 
@@ -1464,6 +1558,8 @@ def handle_kb_add(
             "tags": tags or [],
             "author": author,
             "source_type": source_type,
+            # Issue #14: per-entry confidence weight (already validated above).
+            "trust_score": float(trust_score),
         }
 
         db.table("knowledge.kb_entries").insert(entry).execute()
@@ -1481,6 +1577,7 @@ def handle_kb_add(
                 "topic": topic,
                 "author": author,
                 "source_type": source_type,
+                "trust_score": float(trust_score),
                 "embedded": embedded,
             },
         )
@@ -1577,6 +1674,80 @@ def _finalize_search_response(
     return resp_data
 
 
+def _filter_by_min_score(
+    results: list[dict], search_mode: str, min_score: float | None
+) -> list[dict]:
+    """Drop results scoring below ``min_score`` (Issue #16).
+
+    Pure query-layer filter applied after results are fetched and scored.
+    ``hybrid`` mode filters on each result's ``rrf_score``; ``fts`` and
+    ``semantic`` modes filter on ``score``. Missing scores default to 0.0.
+    When ``min_score`` is None this is a no-op (returns the list unchanged),
+    preserving backward compatibility.
+    """
+    if min_score is None:
+        return results
+    score_field = "rrf_score" if search_mode == "hybrid" else "score"
+    filtered: list[dict] = []
+    for r in results:
+        if score_field not in r:
+            logger.debug(
+                "result missing expected score field %r, defaulting to 0.0: %s",
+                score_field,
+                r,
+            )
+        if r.get(score_field, 0.0) >= min_score:
+            filtered.append(r)
+    return filtered
+
+
+def _validate_trust_score(trust_score: float | None) -> dict | None:
+    """Validate a ``trust_score`` is a number in [0.0, 1.0] (Issue #14).
+
+    Returns ``None`` when valid (including when ``trust_score`` is ``None``,
+    which means "not provided" for the update path). Otherwise returns an
+    ``invalid_input`` ResponseEnvelope the caller should return verbatim.
+    """
+    if trust_score is None:
+        return None
+    # Issue #14: bool is a subclass of int, so float(True)==1.0 / float(False)==0.0
+    # would silently pass. Reject booleans explicitly before coercion.
+    if isinstance(trust_score, bool):
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "trust_score must be a float, not bool",
+        )
+    try:
+        value = float(trust_score)
+    except (TypeError, ValueError):
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "trust_score must be a number between 0.0 and 1.0",
+        )
+    if not (0.0 <= value <= 1.0):
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "trust_score must be between 0.0 and 1.0",
+        )
+    return None
+
+
+def _filter_by_min_trust_score(
+    results: list[dict], min_trust_score: float | None
+) -> list[dict]:
+    """Drop results whose ``trust_score`` is below ``min_trust_score`` (Issue #14).
+
+    Pure query-layer filter applied after results are fetched. A missing
+    ``trust_score`` defaults to 1.0 so that legacy rows (created before the
+    column existed) are never excluded — they are treated as fully trusted.
+    When ``min_trust_score`` is None this is a no-op (returns the list
+    unchanged), preserving backward compatibility.
+    """
+    if min_trust_score is None:
+        return results
+    return [r for r in results if r.get("trust_score", 1.0) >= min_trust_score]
+
+
 def handle_kb_search(
     query: str,
     topic: str = None,
@@ -1588,6 +1759,8 @@ def handle_kb_search(
     parent_query_id: str = None,
     required_requery: bool = False,
     caller_agent: str = None,
+    min_score: float = None,
+    min_trust_score: float = None,
 ) -> dict:
     """Search KB entries.
 
@@ -1599,6 +1772,16 @@ def handle_kb_search(
 
     Semantic and hybrid modes require ``LORE_SEMANTIC_SEARCH=true`` and the
     [semantic] extras. When unavailable, the call degrades to lexical search.
+
+    ``min_score`` (Issue #16): when set, results scoring below the threshold are
+    excluded server-side and ``count`` reflects the post-filter total. Hybrid
+    mode filters on ``rrf_score``; fts/semantic filter on ``score``. None (the
+    default) disables filtering for full backward compatibility.
+
+    ``min_trust_score`` (Issue #14): when set, results whose ``trust_score`` is
+    below the threshold are excluded. Applied before ``min_score`` so the two
+    filters compose. A row with no ``trust_score`` defaults to 1.0 (fully
+    trusted) for backward compatibility. None (the default) disables the filter.
     """
     try:
         from lore import search as _search  # local import: tolerant of degraded envs
@@ -1684,6 +1867,10 @@ def handle_kb_search(
                 search_mode=effective_mode,
                 encode_query=_encode_query,
             )
+            # Issue #14: drop low-confidence rows first so the two filters compose.
+            results = _filter_by_min_trust_score(results, min_trust_score)
+            # Issue #16: drop results below the relevance threshold (post-filter).
+            results = _filter_by_min_score(results, effective_mode, min_score)
             resp_data: dict = {
                 "results": results,
                 "count": len(results),
@@ -1718,6 +1905,10 @@ def handle_kb_search(
                 search_mode=requested_mode,
                 encode_query=_encode_query_pg,
             )
+            # Issue #14: drop low-confidence rows first so the two filters compose.
+            results = _filter_by_min_trust_score(results, min_trust_score)
+            # Issue #16: drop results below the relevance threshold (post-filter).
+            results = _filter_by_min_score(results, requested_mode, min_score)
             resp_data = {
                 "results": results,
                 "count": len(results),
@@ -1739,6 +1930,10 @@ def handle_kb_search(
             results = _search.fts5_search_sqlite(db, query, topic, top_k_int)
             # Strip content from response (consistent with hybrid path).
             results = [{k: v for k, v in r.items() if k != "content"} for r in results]
+            # Issue #14: drop low-confidence rows first so the two filters compose.
+            results = _filter_by_min_trust_score(results, min_trust_score)
+            # Issue #16: drop results below the relevance threshold (post-filter).
+            results = _filter_by_min_score(results, "fts", min_score)
             resp_data = {
                 "results": results,
                 "count": len(results),
@@ -1754,6 +1949,10 @@ def handle_kb_search(
         if is_postgres and requested_mode == "fts":
             pg_rows = _search.fts_search_postgres(db, query, topic, top_k_int)
             pg_rows = [{k: v for k, v in r.items() if k != "content"} for r in pg_rows]
+            # Issue #14: drop low-confidence rows first so the two filters compose.
+            pg_rows = _filter_by_min_trust_score(pg_rows, min_trust_score)
+            # Issue #16: drop results below the relevance threshold (post-filter).
+            pg_rows = _filter_by_min_score(pg_rows, "fts", min_score)
             resp_data = {
                 "results": pg_rows,
                 "count": len(pg_rows),
@@ -1772,7 +1971,7 @@ def handle_kb_search(
         tsquery_safe = _sanitize_search_query(query).replace(" ", " & ")
 
         query_builder = db.table("knowledge.kb_entries").select(
-            "kb_id, topic, title, tags, author, source_type, verified"
+            "kb_id, topic, title, tags, author, source_type, verified, trust_score"
         )
 
         if topic:
@@ -1788,9 +1987,17 @@ def handle_kb_search(
 
         result = query_builder.limit(max(top_k_int, 50)).execute()
 
+        # Issue #14: drop low-confidence rows first so the two filters compose.
+        lexical_rows = _filter_by_min_trust_score(list(result.data), min_trust_score)
+        # Issue #16: drop results below the relevance threshold (post-filter).
+        # The legacy lexical path carries no per-row score, so any positive
+        # min_score excludes everything (score defaults to 0.0); min_score=0.0
+        # and min_score=None both pass all rows through.
+        lexical_results = _filter_by_min_score(lexical_rows, "fts", min_score)
+
         envelope_data = {
-            "results": result.data,
-            "count": len(result.data),
+            "results": lexical_results,
+            "count": len(lexical_results),
             "search_mode": "fts",
             "requested_mode": requested_mode,
         }
@@ -1803,7 +2010,7 @@ def handle_kb_search(
             )
 
         return ResponseEnvelope.success(
-            f"Found {len(result.data)} KB entries",
+            f"Found {len(lexical_results)} KB entries",
             _finalize_search_response(envelope_data, **_telemetry_ctx),
         )
     except Exception as e:
@@ -2070,7 +2277,8 @@ def handle_kb_list(topic: str = None, limit: int = 100, offset: int = 0) -> dict
         query = (
             db.table("knowledge.kb_entries")
             .select(
-                "kb_id, topic, title, tags, author, source_type, verified, created_at",
+                "kb_id, topic, title, tags, author, source_type, verified, "
+                "trust_score, created_at",
                 count="exact",
             )
         )
@@ -2116,6 +2324,7 @@ def handle_kb_update(
     tags: list = None,
     topic: str = None,
     verified: Any = _VERIFIED_SENTINEL,
+    trust_score: float = None,
     entry_id: str = None,
     **kwargs,
 ) -> dict:
@@ -2129,8 +2338,17 @@ def handle_kb_update(
 
     `verified` accepts True (human-verified), False (disputed), or None (reset to
     unreviewed). Omit the argument entirely to leave the verified state unchanged.
+
+    ``trust_score`` (Issue #14) accepts a number in [0.0, 1.0]. Omit it (leave
+    None) to leave the existing confidence unchanged; out-of-range values are
+    rejected with an invalid_input envelope.
     """
     import psycopg2
+
+    # Issue #14: validate the confidence bound when provided (None = unchanged).
+    err = _validate_trust_score(trust_score)
+    if err is not None:
+        return err
 
     # BUG-1: catch unsupported fields (e.g. the removed `metadata`) at the
     # handler level and return a clean invalid_input envelope. Using **kwargs
@@ -2140,7 +2358,8 @@ def handle_kb_update(
         unsupported = ", ".join(sorted(kwargs))
         return ResponseEnvelope.error(
             ErrorCodes.INVALID_INPUT,
-            f"Unsupported field(s): {unsupported}. Use title, content, topic, tags, or verified.",
+            f"Unsupported field(s): {unsupported}. Use title, content, topic, tags, "
+            "verified, or trust_score.",
         )
 
     # BUG-3: accept kb_id as the primary param name; fall back to entry_id.
@@ -2186,6 +2405,11 @@ def handle_kb_update(
             # Allow True, False, or explicit None (reset to unreviewed)
             update_data["verified"] = verified
 
+        # Issue #14: only write trust_score when explicitly provided so an
+        # omitted value never resets an entry's existing confidence.
+        if trust_score is not None:
+            update_data["trust_score"] = float(trust_score)
+
         # Always update the updated_at timestamp
         update_data["updated_at"] = datetime.utcnow().isoformat()
 
@@ -2193,7 +2417,8 @@ def handle_kb_update(
         if set(update_data.keys()) == {"updated_at"}:
             return ResponseEnvelope.error(
                 ErrorCodes.INVALID_INPUT,
-                "No fields provided for update. Specify content, title, tags, topic, and/or verified.",
+                "No fields provided for update. Specify content, title, tags, topic, "
+                "verified, and/or trust_score.",
             )
 
         # Perform the update. BUG-1: an unknown/unsupported column reaching the
@@ -2494,6 +2719,226 @@ def handle_journal_get(entry_id: str) -> dict:
     except Exception as e:
         logger.error(f"Error getting journal entry: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+def _journal_like_score(content: str, query: str) -> float:
+    """Heuristic relevance score for the LIKE/ILIKE journal-search fallback.
+
+    The KB FTS5/pgvector paths carry a real per-row score; journal entries have
+    no FTS index, so we derive a lightweight score from term-occurrence counts.
+    Returns the total number of (case-insensitive) query-term hits in ``content``,
+    normalised to a float so the field type matches the FTS paths. A whole-query
+    phrase match adds a bonus so phrase hits rank above scattered term hits.
+    """
+    if not content:
+        return 0.0
+    haystack = content.lower()
+    q = query.lower().strip()
+    if not q:
+        return 0.0
+    score = float(haystack.count(q))  # phrase-match bonus (whole query)
+    for term in {t for t in q.split() if t}:
+        score += float(haystack.count(term))
+    return score
+
+
+def handle_journal_search(
+    query: str,
+    limit: int = 20,
+    entry_type: str = None,
+    date_from: str = None,
+    date_to: str = None,
+) -> dict:
+    """Full-text search across journal entry content (Issue #15).
+
+    Journal entries were previously only date-browsable (``journal_list`` /
+    ``journal_get``); this enables content-based recall. Optional ``entry_type``,
+    ``date_from`` and ``date_to`` (ISO ``YYYY-MM-DD``) filters narrow results.
+
+    Backend behaviour:
+      * **PostgreSQL** — ranked FTS via ``websearch_to_tsquery`` / ``ts_rank_cd``
+        over ``content``; degrades to ``ILIKE`` if the FTS query errors.
+      * **SQLite / other** — there is no journal FTS5 index, so the query-layer
+        ``ILIKE`` (case-insensitive ``LIKE '%query%'``) fallback is used, mirroring
+        the kb_search degradation path. A heuristic ``score`` is attached so the
+        response shape matches the FTS path.
+
+    Every result includes ``entry_id``, ``date``, ``entry_type``, ``tags``,
+    ``content`` and ``score``. ``count`` reflects the number of returned rows.
+    """
+    try:
+        # Validate ISO date filters before applying any filtering. Reject
+        # malformed dates up front so callers get an actionable error rather
+        # than silently-ignored or backend-specific failures.
+        from datetime import date as _date
+
+        if date_from is not None:
+            try:
+                _date.fromisoformat(date_from)
+            except ValueError:
+                return ResponseEnvelope.error(
+                    ErrorCodes.INVALID_INPUT,
+                    f"date_from must be ISO format (YYYY-MM-DD), got: {date_from!r}",
+                )
+
+        if date_to is not None:
+            try:
+                _date.fromisoformat(date_to)
+            except ValueError:
+                return ResponseEnvelope.error(
+                    ErrorCodes.INVALID_INPUT,
+                    f"date_to must be ISO format (YYYY-MM-DD), got: {date_to!r}",
+                )
+
+        # Bound limit defensively (schema constrains 1..200, but internal callers
+        # may bypass the schema). Default 20; reject sub-1 limits.
+        try:
+            limit_int = int(limit)
+        except (TypeError, ValueError):
+            limit_int = 20
+        if limit_int < 1:
+            return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, "limit must be at least 1")
+        limit_int = min(200, limit_int)
+
+        backend = os.getenv("DB_BACKEND", "").strip().lower()
+        is_postgres = backend in {"local", "postgres", "postgresql"}
+
+        # PostgreSQL ranked FTS path (uses to_tsvector/websearch_to_tsquery over
+        # content; degrades to ILIKE on FTS error). Raw SQL because the journal
+        # table has no FTS helper in search.py and we want a real rank score.
+        if is_postgres:
+            rows = _journal_fts_postgres(query, limit_int, entry_type, date_from, date_to)
+            return ResponseEnvelope.success(
+                f"Found {len(rows)} journal entries",
+                {
+                    "entries": rows,
+                    "count": len(rows),
+                    "search_mode": "fts",
+                    "backend": "postgres",
+                },
+            )
+
+        # SQLite / default lexical (ILIKE) path. No journal FTS5 index exists, so
+        # this is the documented degradation path (same shape as kb_search LIKE).
+        safe_query = _sanitize_search_query(query)
+
+        query_builder = db.table("knowledge.journal_entries").select(
+            "entry_id, date, entry_type, tags, content"
+        )
+        if entry_type:
+            query_builder = query_builder.eq("entry_type", entry_type)
+        if date_from:
+            query_builder = query_builder.gte("date", date_from)
+        if date_to:
+            query_builder = query_builder.lte("date", date_to)
+
+        # Case-insensitive substring match on content. A blank sanitized query
+        # (e.g. query was only operator tokens) matches everything via "%%".
+        query_builder = query_builder.ilike("content", f"%{safe_query}%")
+        query_builder = query_builder.order("date", desc=True).order("created_at", desc=True)
+
+        result = query_builder.limit(limit_int).execute()
+        rows = list(result.data or [])
+
+        # Attach a heuristic score and re-rank by it (descending), preserving the
+        # date-ordered fetch as a stable tiebreak. Limit again post-scoring.
+        for row in rows:
+            row["score"] = _journal_like_score(row.get("content", ""), query)
+        rows.sort(key=lambda r: r.get("score", 0.0), reverse=True)
+        rows = rows[:limit_int]
+
+        return ResponseEnvelope.success(
+            f"Found {len(rows)} journal entries",
+            {
+                "entries": rows,
+                "count": len(rows),
+                "search_mode": "ilike",
+                "backend": "sqlite",
+            },
+        )
+    except Exception as e:
+        logger.error(f"Error searching journal: {e}")
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+def _journal_fts_postgres(
+    query: str,
+    limit: int,
+    entry_type: str = None,
+    date_from: str = None,
+    date_to: str = None,
+) -> list[dict]:
+    """PostgreSQL ranked FTS over journal content; degrades to ILIKE on error.
+
+    Returns rows with entry_id, date, entry_type, tags, content and a numeric
+    ``score`` (``ts_rank_cd`` for the FTS path, term-count heuristic for the
+    ILIKE fallback). Raises nothing on a failed FTS query — it falls back so a
+    misconfigured text-search config never breaks search entirely.
+    """
+    conn = db._get_connection()
+
+    where: list[str] = []
+    params: list[Any] = []
+
+    def _append_filters() -> None:
+        if entry_type:
+            where.append("entry_type = %s")
+            params.append(entry_type)
+        if date_from:
+            where.append("date >= %s")
+            params.append(date_from)
+        if date_to:
+            where.append("date <= %s")
+            params.append(date_to)
+
+    # --- FTS attempt -------------------------------------------------------
+    try:
+        params = [query]
+        where = ["to_tsvector('english', coalesce(content,'')) "
+                 "@@ websearch_to_tsquery('english', %s)"]
+        _append_filters()
+        sql = (
+            "SELECT entry_id, date, entry_type, tags, content, "
+            "       ts_rank_cd(to_tsvector('english', coalesce(content,'')), "
+            "                  websearch_to_tsquery('english', %s)) AS score "
+            "FROM knowledge.journal_entries "
+            "WHERE " + " AND ".join(where) +
+            " ORDER BY score DESC NULLS LAST LIMIT %s"
+        )
+        # The rank %s is the first placeholder; prepend the query for it.
+        fts_params = [query] + params + [int(limit)]
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, fts_params)
+            col_names = [d[0] for d in cursor.description]
+            return [dict(zip(col_names, raw)) for raw in cursor.fetchall()]
+        finally:
+            cursor.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Journal PG FTS failed for %r, falling back to ILIKE: %s", query, exc)
+
+    # --- ILIKE fallback ----------------------------------------------------
+    params = [f"%{query}%"]
+    where = ["content ILIKE %s"]
+    _append_filters()
+    sql = (
+        "SELECT entry_id, date, entry_type, tags, content "
+        "FROM knowledge.journal_entries "
+        "WHERE " + " AND ".join(where) +
+        " ORDER BY date DESC, created_at DESC LIMIT %s"
+    )
+    params.append(int(limit))
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, params)
+        col_names = [d[0] for d in cursor.description]
+        rows = [dict(zip(col_names, raw)) for raw in cursor.fetchall()]
+    finally:
+        cursor.close()
+    for row in rows:
+        row["score"] = _journal_like_score(row.get("content", ""), query)
+    rows.sort(key=lambda r: r.get("score", 0.0), reverse=True)
+    return rows
 
 
 def handle_snapshot_config(config_name: str, config_data: dict) -> dict:
