@@ -103,7 +103,12 @@
     café produce identical tokens.  Test queries with special chars to
     avoid silent mismatches in recall metrics.
   queries:
-    - text: "apostrophe hyphen unicode fts"
+    # "fts" only appears in the body as "FTS"/"FTS5" (upper-case / compound),
+    # so an "fts" FTS query depends on tokenizer case-folding behaviour we don't
+    # control on staging. Use "tokenisation" instead — it appears literally in
+    # lower-case in the body ("...before tokenisation, so café...") so this query
+    # matches regardless of how the tokenizer case-folds.
+    - text: "apostrophe hyphen unicode tokenisation"
       mode: fts
       expect_match: true
       max_rank: 25

@@ -135,9 +135,11 @@ class TestRegressionCorpus:
         # prior runs can affect rank; teardown in _seed_and_cleanup prevents
         # accumulation across runs.  If rank instability appears, consider
         # passing topic=self._topic to kb_search once the server supports it.
-        # top_k must cover the highest max_rank in the corpus (currently 25) and
-        # the false-negative inspection window (_TOP_N_FALSE_NEG).
-        result = client.kb_search(q_text, search_mode=mode, top_k=max(25, _TOP_N_FALSE_NEG))
+        # top_k must cover this query's own max_rank (so a future entry with
+        # max_rank > 25 still gets a wide enough window), the false-negative
+        # inspection window (_TOP_N_FALSE_NEG), and a sane floor of 25.
+        top_k = max(max_rank or 0, _TOP_N_FALSE_NEG, 25)
+        result = client.kb_search(q_text, search_mode=mode, top_k=top_k)
         results = _get_results(result)
         rank = _find_rank(results, self._seeded_id)
 

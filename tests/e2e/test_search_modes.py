@@ -7,6 +7,8 @@ relevance — that is the job of ``test_regression.py``.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from .client import LoreClient
@@ -36,6 +38,11 @@ def seeded_client(client: LoreClient, cleanup_topic: str) -> tuple[LoreClient, s
             "for a known-good query against recently added content."
         ),
     )
+    # Brief pause to allow the FTS index to settle after seeding. The SQLite FTS
+    # write-ahead log needs time to flush on the staging server; without this
+    # wait TestCrossModeConsistency races the FTS index and sees empty results.
+    # Matches the 2 s wait used in test_regression.py's _seed_and_cleanup.
+    time.sleep(2)
     return client, sentinel
 
 
