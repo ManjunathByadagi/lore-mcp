@@ -52,6 +52,17 @@ class QueryResult:
     error: str | None = None
 
 
+# Issue #14: the ``trust_score`` column carries a per-entry confidence signal in
+# [0.0, 1.0] (default 1.0). Added by a single idempotent DDL statement rather
+# than by editing a frozen base-schema constant. Mirrors
+# migrations/009_trust_score.sql byte-for-byte (a unit test enforces parity).
+# Applied in LocalPostgresClient._init_schema for PostgreSQL; SQLite gets the
+# equivalent column from _SQLITE_SCHEMA + an idempotent PRAGMA-guarded ALTER.
+KB_ENTRIES_TRUST_SCORE_DDL = (
+    "ALTER TABLE knowledge.kb_entries ADD COLUMN IF NOT EXISTS trust_score REAL DEFAULT 1.0;"
+)
+
+
 class LocalPostgresClient:
     """
     PostgreSQL client that mimics Supabase's query interface.
@@ -133,6 +144,13 @@ class LocalPostgresClient:
         # an unbound _skip_pgvector later (UnboundLocalError).
         _skip_pgvector = True
         try:
+            # Issue #14: trust_score confidence column (idempotent ADD COLUMN IF
+            # NOT EXISTS). Applied before the GIN index below so a fresh column
+            # is in place for any later schema work. Existing rows pick up the
+            # DEFAULT 1.0 automatically — no backfill needed.
+            cursor.execute(KB_ENTRIES_TRUST_SCORE_DDL.rstrip(";"))
+            logger.debug("knowledge.kb_entries.trust_score ensured")
+
             # Issue #10: GIN index using simple config + regexp_replace so that
             # dotted/slashed identifiers like asyncio.gather are split into
             # individual tokens. Idempotent (CREATE INDEX IF NOT EXISTS).
@@ -738,7 +756,8 @@ CREATE TABLE IF NOT EXISTS knowledge_kb_entries (
     tags TEXT DEFAULT '[]',
     author TEXT,
     source_type TEXT,
-    verified INTEGER
+    verified INTEGER,
+    trust_score REAL DEFAULT 1.0
 );
 CREATE TABLE IF NOT EXISTS knowledge_research_notes (
     note_id TEXT PRIMARY KEY,
@@ -889,7 +908,8 @@ _CORE_SQLITE_STATEMENTS: tuple[str, ...] = (
         tags TEXT DEFAULT '[]',
         author TEXT,
         source_type TEXT,
-        verified INTEGER
+        verified INTEGER,
+        trust_score REAL DEFAULT 1.0
     )""",
     """CREATE TABLE IF NOT EXISTS knowledge_research_notes (
         note_id TEXT PRIMARY KEY,
@@ -1487,6 +1507,10 @@ class SqliteClient:
         try:
             conn.executescript(_SQLITE_SCHEMA)
             conn.commit()
+            # Issue #14: add trust_score to pre-existing databases whose
+            # knowledge_kb_entries table was created before this column existed
+            # (CREATE TABLE IF NOT EXISTS above is a no-op for such tables).
+            self._migrate_trust_score(conn)
             # Probe whether FTS5 and vec0 actually materialised.
             self._probe_optional_features()
             return
@@ -1515,7 +1539,31 @@ class SqliteClient:
                 exc,
             )
             self._init_core_schema_only(conn)
+            # Issue #14: same idempotent column migration on the fallback path.
+            self._migrate_trust_score(conn)
             self._probe_optional_features()
+
+    def _migrate_trust_score(self, conn) -> None:
+        """Add knowledge_kb_entries.trust_score to pre-existing databases.
+
+        SQLite has no ``ADD COLUMN IF NOT EXISTS``, so we inspect the table's
+        columns via ``PRAGMA table_info`` and only issue the ALTER when the
+        column is absent. Fresh databases already have the column from
+        ``_SQLITE_SCHEMA`` / ``_CORE_SQLITE_STATEMENTS``, making this a no-op.
+        Idempotent and safe to call on every startup. Mirrors Issue #14's
+        PostgreSQL ``ADD COLUMN IF NOT EXISTS trust_score REAL DEFAULT 1.0``.
+        """
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_kb_entries)")}
+            if "trust_score" not in cols:
+                conn.execute(
+                    "ALTER TABLE knowledge_kb_entries ADD COLUMN trust_score REAL DEFAULT 1.0"
+                )
+                conn.commit()
+                logger.info("Migrated knowledge_kb_entries: added trust_score column")
+        except self._sqlite3.OperationalError as exc:  # pragma: no cover - defensive
+            # Never let a column migration failure break schema init.
+            logger.warning("trust_score column migration skipped: %s", exc)
 
     def _init_core_schema_only(self, conn) -> None:
         """Fallback path: apply only the plain CREATE TABLE statements.

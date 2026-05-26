@@ -728,3 +728,422 @@ def test_kb_search_min_score_in_schema():
     assert schema["properties"]["min_score"]["type"] == "number"
     # min_score is optional (not required) for backward compatibility.
     assert "min_score" not in schema.get("required", [])
+
+
+# ---------------------------------------------------------------------------
+# Issue #14: trust_score field on KB entries
+#
+# kb_add accepts an optional, validated trust_score (default 1.0); kb_update
+# updates it only when provided; kb_search returns it and supports a
+# min_trust_score filter that composes with min_score. A missing trust_score
+# defaults to 1.0 (fully trusted) for backward compatibility with legacy rows.
+# ---------------------------------------------------------------------------
+
+
+class _FakeInsertQuery:
+    """Fluent fake for the kb_add chain: table(...).insert(entry).execute()."""
+
+    def __init__(self, db: "_FakeInsertDb"):
+        self._db = db
+
+    def insert(self, data, upsert=False):
+        self._db.inserted.append(data)
+        return self
+
+    def execute(self):
+        return QueryResult(data=[])
+
+
+class _FakeInsertDb:
+    """Captures the entry dict handed to kb_add's INSERT."""
+
+    def __init__(self):
+        self.inserted: list[dict] = []
+
+    def table(self, _name):
+        return _FakeInsertQuery(self)
+
+
+# --- kb_add validation + pass-through -------------------------------------
+
+
+def test_kb_add_default_trust_score_present_in_response(monkeypatch):
+    """kb_add with no trust_score defaults to 1.0 in both the row and response."""
+    fake = _FakeInsertDb()
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_add(topic="t", title="T", content="c")
+    assert resp["ok"] is True
+    assert resp["data"]["trust_score"] == 1.0
+    assert fake.inserted[0]["trust_score"] == 1.0
+
+
+def test_kb_add_explicit_trust_score_stored_and_returned(monkeypatch):
+    """kb_add with trust_score=0.7 stores and echoes the value."""
+    fake = _FakeInsertDb()
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_add(topic="t", title="T", content="c", trust_score=0.7)
+    assert resp["ok"] is True
+    assert resp["data"]["trust_score"] == 0.7
+    assert fake.inserted[0]["trust_score"] == 0.7
+
+
+def test_kb_add_trust_score_above_one_rejected(monkeypatch):
+    """trust_score=1.5 is out of range -> invalid_input, no DB write."""
+    fake = _FakeInsertDb()
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_add(topic="t", title="T", content="c", trust_score=1.5)
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+    assert fake.inserted == []  # never reached the DB
+
+
+def test_kb_add_trust_score_below_zero_rejected(monkeypatch):
+    """trust_score=-0.1 is out of range -> invalid_input, no DB write."""
+    fake = _FakeInsertDb()
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_add(topic="t", title="T", content="c", trust_score=-0.1)
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+    assert fake.inserted == []
+
+
+def test_kb_add_trust_score_boundaries_accepted(monkeypatch):
+    """The inclusive bounds 0.0 and 1.0 are both valid."""
+    for value in (0.0, 1.0):
+        fake = _FakeInsertDb()
+        monkeypatch.setattr(srv, "db", fake)
+        resp = srv.handle_kb_add(topic="t", title="T", content="c", trust_score=value)
+        assert resp["ok"] is True
+        assert fake.inserted[0]["trust_score"] == value
+
+
+# --- kb_update -------------------------------------------------------------
+
+
+def test_kb_update_trust_score_updates_field(monkeypatch):
+    """kb_update with trust_score=0.3 writes trust_score into the update payload."""
+    existing = {"kb_id": "kb_ts", "title": "T", "content": "c", "trust_score": 1.0}
+    updated = {"kb_id": "kb_ts", "title": "T", "content": "c", "trust_score": 0.3}
+    fake = _FakeDb(current_row=existing, updated_row=updated)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_update(kb_id="kb_ts", trust_score=0.3)
+    assert resp["ok"] is True
+    assert "trust_score" in resp["data"]["updated_fields"]
+    assert fake.updates[0]["trust_score"] == 0.3
+
+
+def test_kb_update_without_trust_score_does_not_reset(monkeypatch):
+    """Omitting trust_score must NOT write the column (preserves existing value)."""
+    existing = {"kb_id": "kb_ts2", "title": "Old", "content": "c", "trust_score": 0.5}
+    updated = {"kb_id": "kb_ts2", "title": "New", "content": "c", "trust_score": 0.5}
+    fake = _FakeDb(current_row=existing, updated_row=updated)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_update(kb_id="kb_ts2", title="New")
+    assert resp["ok"] is True
+    # trust_score must be absent from the update payload (left unchanged).
+    assert "trust_score" not in fake.updates[0]
+    assert "trust_score" not in resp["data"]["updated_fields"]
+
+
+def test_kb_update_trust_score_out_of_range_rejected(monkeypatch):
+    """An out-of-range trust_score on update -> invalid_input, no DB write."""
+    fake = _FakeDb(current_row={"kb_id": "kb_ts3", "title": "T", "content": "c"})
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_update(kb_id="kb_ts3", trust_score=2.0)
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+    assert fake.updates == []  # never reached the DB
+
+
+# --- _filter_by_min_trust_score helper ------------------------------------
+
+
+def test_min_trust_score_none_is_noop():
+    """min_trust_score=None returns the list unchanged (backward compat)."""
+    rows = [{"kb_id": "a", "trust_score": 0.2}, {"kb_id": "b"}]
+    out = srv._filter_by_min_trust_score(rows, None)
+    assert out == rows
+
+
+def test_min_trust_score_missing_defaults_to_one():
+    """A row with no trust_score is treated as 1.0 (fully trusted) and kept."""
+    rows = [{"kb_id": "a"}, {"kb_id": "b", "trust_score": 0.1}]
+    out = srv._filter_by_min_trust_score(rows, 0.7)
+    assert [r["kb_id"] for r in out] == ["a"]  # legacy row kept, low-conf dropped
+
+
+def test_min_trust_score_zero_passes_all():
+    """min_trust_score=0.0 keeps every result (boundary)."""
+    rows = [{"kb_id": "a", "trust_score": 0.0}, {"kb_id": "b", "trust_score": 0.5}]
+    out = srv._filter_by_min_trust_score(rows, 0.0)
+    assert [r["kb_id"] for r in out] == ["a", "b"]
+
+
+def test_min_trust_score_filters_below_threshold():
+    """Rows with trust_score below the threshold are excluded."""
+    rows = [
+        {"kb_id": "a", "trust_score": 0.9},
+        {"kb_id": "b", "trust_score": 0.4},
+        {"kb_id": "c", "trust_score": 0.7},
+    ]
+    out = srv._filter_by_min_trust_score(rows, 0.7)
+    assert [r["kb_id"] for r in out] == ["a", "c"]  # b (0.4) dropped
+
+
+# --- kb_search end-to-end --------------------------------------------------
+
+
+def test_kb_search_returns_trust_score_field(monkeypatch):
+    """kb_search results carry the trust_score column through to the response."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True))
+    monkeypatch.setattr(
+        srch,
+        "fts5_search_sqlite",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "score": 0.9, "trust_score": 0.8, "content": "x"},
+        ],
+    )
+    resp = srv.handle_kb_search("q", search_mode="fts")
+    assert resp["ok"] is True
+    assert resp["data"]["results"][0]["trust_score"] == 0.8
+
+
+def test_kb_search_min_trust_score_filters_and_counts(monkeypatch):
+    """min_trust_score excludes low-confidence rows; count = filtered len."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True))
+    monkeypatch.setattr(
+        srch,
+        "fts5_search_sqlite",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "score": 0.9, "trust_score": 0.9, "content": "x"},
+            {"kb_id": "b", "title": "B", "score": 0.8, "trust_score": 0.4, "content": "y"},
+            {"kb_id": "c", "title": "C", "score": 0.7, "trust_score": 0.7, "content": "z"},
+        ],
+    )
+    resp = srv.handle_kb_search("q", search_mode="fts", min_trust_score=0.7)
+    assert resp["ok"] is True
+    kept_ids = [r["kb_id"] for r in resp["data"]["results"]]
+    assert kept_ids == ["a", "c"]  # b (0.4) dropped
+    assert resp["data"]["count"] == 2
+    assert resp["data"]["count"] == len(resp["data"]["results"])
+
+
+def test_kb_search_min_trust_score_zero_passes_all(monkeypatch):
+    """min_trust_score=0.0 keeps every result."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True))
+    monkeypatch.setattr(
+        srch,
+        "fts5_search_sqlite",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "score": 0.9, "trust_score": 0.1, "content": "x"},
+            {"kb_id": "b", "title": "B", "score": 0.8, "trust_score": 0.0, "content": "y"},
+        ],
+    )
+    resp = srv.handle_kb_search("q", search_mode="fts", min_trust_score=0.0)
+    assert resp["ok"] is True
+    assert [r["kb_id"] for r in resp["data"]["results"]] == ["a", "b"]
+    assert resp["data"]["count"] == 2
+
+
+def test_kb_search_min_trust_score_and_min_score_compose(monkeypatch):
+    """Both filters apply: a row must clear min_trust_score AND min_score."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True))
+    monkeypatch.setattr(
+        srch,
+        "fts5_search_sqlite",
+        lambda *_a, **_k: [
+            # passes both
+            {"kb_id": "a", "title": "A", "score": 0.9, "trust_score": 0.9, "content": "x"},
+            # high score but low trust -> dropped by min_trust_score
+            {"kb_id": "b", "title": "B", "score": 0.9, "trust_score": 0.2, "content": "y"},
+            # high trust but low score -> dropped by min_score
+            {"kb_id": "c", "title": "C", "score": 0.1, "trust_score": 0.9, "content": "z"},
+        ],
+    )
+    resp = srv.handle_kb_search("q", search_mode="fts", min_score=0.5, min_trust_score=0.7)
+    assert resp["ok"] is True
+    kept_ids = [r["kb_id"] for r in resp["data"]["results"]]
+    assert kept_ids == ["a"]  # only the row clearing both thresholds survives
+    assert resp["data"]["count"] == 1
+
+
+def test_kb_search_missing_trust_score_defaults_to_trusted(monkeypatch):
+    """Legacy rows lacking trust_score are treated as 1.0 and survive a filter."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True))
+    monkeypatch.setattr(
+        srch,
+        "fts5_search_sqlite",
+        lambda *_a, **_k: [
+            {"kb_id": "legacy", "title": "L", "score": 0.9, "content": "x"},  # no trust_score
+            {"kb_id": "low", "title": "Lo", "score": 0.9, "trust_score": 0.3, "content": "y"},
+        ],
+    )
+    resp = srv.handle_kb_search("q", search_mode="fts", min_trust_score=0.7)
+    assert resp["ok"] is True
+    assert [r["kb_id"] for r in resp["data"]["results"]] == ["legacy"]
+
+
+# --- schema assertions -----------------------------------------------------
+
+
+def test_kb_add_trust_score_in_schema():
+    """kb_add exposes an optional numeric trust_score bounded to [0.0, 1.0]."""
+    schema = srv._TOOL_SCHEMA_MAP["kb_add"]
+    ts = schema["properties"]["trust_score"]
+    assert ts["type"] == "number"
+    assert ts["minimum"] == 0.0
+    assert ts["maximum"] == 1.0
+    assert ts["default"] == 1.0
+    assert "trust_score" not in schema.get("required", [])
+
+
+def test_kb_update_trust_score_in_schema():
+    """kb_update exposes an optional numeric trust_score bounded to [0.0, 1.0]."""
+    schema = srv._TOOL_SCHEMA_MAP["kb_update"]
+    ts = schema["properties"]["trust_score"]
+    assert ts["type"] == "number"
+    assert ts["minimum"] == 0.0
+    assert ts["maximum"] == 1.0
+    assert "trust_score" not in schema.get("required", [])
+
+
+def test_kb_search_min_trust_score_in_schema():
+    """kb_search exposes an optional numeric min_trust_score bounded to [0.0, 1.0]."""
+    schema = srv._TOOL_SCHEMA_MAP["kb_search"]
+    mts = schema["properties"]["min_trust_score"]
+    assert mts["type"] == "number"
+    assert mts["minimum"] == 0.0
+    assert mts["maximum"] == 1.0
+    assert "min_trust_score" not in schema.get("required", [])
+
+
+# ---------------------------------------------------------------------------
+# Code Critic WARN fixes (Issue #14):
+#   1. FastMCP kb_search forwards min_score (Issue #16 regression)
+#   2. kb_list SELECT includes trust_score
+#   3. _validate_trust_score rejects bool (no silent float(True)==1.0)
+#   4. kb_add with trust_score=None normalises to 1.0 (no float(None) crash)
+# ---------------------------------------------------------------------------
+
+
+# --- Finding 1: FastMCP wrapper forwards min_score ------------------------
+
+
+def test_fastmcp_kb_search_accepts_min_score():
+    """The FastMCP kb_search wrapper exposes a min_score parameter (Issue #16)."""
+    import inspect
+
+    import lore.server_fastmcp as fmcp
+
+    params = inspect.signature(fmcp.kb_search).parameters
+    assert "min_score" in params
+    # Optional with a None default for backward compatibility.
+    assert params["min_score"].default is None
+
+
+def test_fastmcp_kb_search_forwards_min_score(monkeypatch):
+    """The FastMCP wrapper passes min_score through to handle_kb_search."""
+    import lore.server_fastmcp as fmcp
+
+    captured: dict = {}
+
+    def _fake_handle_kb_search(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "data": {"results": []}}
+
+    monkeypatch.setattr(fmcp._srv, "handle_kb_search", _fake_handle_kb_search)
+
+    fmcp.kb_search("q", min_score=0.42, min_trust_score=0.7)
+    assert captured["min_score"] == 0.42
+    # min_trust_score still forwarded alongside (no regression).
+    assert captured["min_trust_score"] == 0.7
+
+
+# --- Finding 2: kb_list SELECT includes trust_score -----------------------
+
+
+class _SelectCapturingListQuery(_FakeListQuery):
+    """_FakeListQuery that records the column list passed to select()."""
+
+    def select(self, columns="*", **_k):
+        self._db.selected_columns = columns
+        return self
+
+
+class _SelectCapturingListDb(_FakeListDb):
+    def __init__(self, rows=None, total_count=0):
+        super().__init__(rows=rows, total_count=total_count)
+        self.selected_columns = None
+
+    def table(self, _name):
+        return _SelectCapturingListQuery(self)
+
+
+def test_kb_list_selects_trust_score_column(monkeypatch):
+    """kb_list's SELECT must name trust_score so clients can audit trust levels."""
+    fake = _SelectCapturingListDb(rows=[], total_count=0)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_list()
+    assert resp["ok"] is True
+    assert "trust_score" in fake.selected_columns
+
+
+def test_kb_list_returns_trust_score_in_entries(monkeypatch):
+    """A row's trust_score flows through to the kb_list response entries."""
+    rows = [{"kb_id": "kb_a", "title": "A", "trust_score": 0.6}]
+    fake = _FakeListDb(rows=rows, total_count=1)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_list()
+    assert resp["ok"] is True
+    assert resp["data"]["entries"][0]["trust_score"] == 0.6
+
+
+# --- Finding 3: _validate_trust_score rejects bool ------------------------
+
+
+def test_validate_trust_score_rejects_true():
+    """True must not be silently coerced to 1.0 -> invalid_input."""
+    err = srv._validate_trust_score(True)
+    assert err is not None
+    assert err["ok"] is False
+    assert err["error"] == "invalid_input"
+
+
+def test_validate_trust_score_rejects_false():
+    """False must not be silently coerced to 0.0 -> invalid_input."""
+    err = srv._validate_trust_score(False)
+    assert err is not None
+    assert err["ok"] is False
+    assert err["error"] == "invalid_input"
+
+
+def test_kb_add_bool_trust_score_rejected(monkeypatch):
+    """kb_add with trust_score=True is rejected and never reaches the DB."""
+    fake = _FakeInsertDb()
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_add(topic="t", title="T", content="c", trust_score=True)
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+    assert fake.inserted == []
+
+
+# --- Finding 4: kb_add with trust_score=None normalises to 1.0 ------------
+
+
+def test_kb_add_none_trust_score_normalises_to_one(monkeypatch):
+    """kb_add(trust_score=None) must default to 1.0 without raising TypeError."""
+    fake = _FakeInsertDb()
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_add(topic="t", title="T", content="c", trust_score=None)
+    assert resp["ok"] is True
+    assert resp["data"]["trust_score"] == 1.0
+    assert fake.inserted[0]["trust_score"] == 1.0
