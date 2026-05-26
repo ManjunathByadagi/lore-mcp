@@ -61,7 +61,9 @@ class ErrorCodes:
     INTERNAL_ERROR = "internal_error"
     EXTERNAL_SERVICE_ERROR = "external_service_error"
     PRODUCTION_GUARD = "production_guard"
-    NOT_CONFIGURED = "not_configured"  # emitted by mcp_index_scan/rebuild when LORE_MCP_SERVERS_PATH is unset
+    NOT_CONFIGURED = (
+        "not_configured"  # emitted by mcp_index_scan/rebuild when LORE_MCP_SERVERS_PATH is unset
+    )
     # Reserved for future use — not currently emitted by any handler.
     NONZERO_EXIT = "nonzero_exit"
     TIMEOUT = "timeout"

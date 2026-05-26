@@ -493,9 +493,7 @@ def hn_fixture(server_module, session_id):
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM knowledge.hard_negative_pairs WHERE doc_id = %s", (kb_id,)
-            )
+            cur.execute("DELETE FROM knowledge.hard_negative_pairs WHERE doc_id = %s", (kb_id,))
             cur.execute(
                 "DELETE FROM knowledge.retrieval_telemetry WHERE query_id = %s", (query_id,)
             )

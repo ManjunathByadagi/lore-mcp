@@ -14,7 +14,6 @@ import lore.search as srch
 import lore.server as srv
 from lore.db_client import QueryResult
 
-
 # ---------------------------------------------------------------------------
 # Fluent fake db: db.table(...).select(...).eq(...).maybe_single().execute()
 # and .update(...).eq(...).execute() / .delete().eq(...).execute().
@@ -22,7 +21,7 @@ from lore.db_client import QueryResult
 
 
 class _FakeQuery:
-    def __init__(self, db: "_FakeDb"):
+    def __init__(self, db: _FakeDb):
         self._db = db
         self._is_update = False
 
@@ -95,7 +94,7 @@ def test_kb_update_metadata_returns_clean_error(monkeypatch):
     existing = {"kb_id": "kb_1", "title": "T", "content": "c"}
     # The update execute() raises UndefinedColumn (a psycopg2.ProgrammingError
     # subclass) — mirroring what Postgres does for an unknown column.
-    err = psycopg2.errors.UndefinedColumn("column \"metadata\" does not exist")
+    err = psycopg2.errors.UndefinedColumn('column "metadata" does not exist')
     fake = _FakeDb(current_row=existing, update_raises=err)
     monkeypatch.setattr(srv, "db", fake)
 
@@ -322,7 +321,7 @@ class _FakeListQuery:
     The configured rows are returned as data and total_count as QueryResult.count.
     """
 
-    def __init__(self, db: "_FakeListDb"):
+    def __init__(self, db: _FakeListDb):
         self._db = db
 
     def select(self, *_a, **_k):
@@ -419,9 +418,7 @@ def test_kb_list_schema_has_pagination():
 
 
 def test_multi_search_description_updated():
-    schema_desc = next(
-        t.description for t in srv._TOOL_DEFINITIONS if t.name == "multi_search"
-    )
+    schema_desc = next(t.description for t in srv._TOOL_DEFINITIONS if t.name == "multi_search")
     assert "across all configured sources" in schema_desc
     assert "multiple queries" not in schema_desc.lower()
 
@@ -743,7 +740,7 @@ def test_kb_search_min_score_in_schema():
 class _FakeInsertQuery:
     """Fluent fake for the kb_add chain: table(...).insert(entry).execute()."""
 
-    def __init__(self, db: "_FakeInsertDb"):
+    def __init__(self, db: _FakeInsertDb):
         self._db = db
 
     def insert(self, data, upsert=False):

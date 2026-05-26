@@ -392,8 +392,7 @@ _TOOL_DEFINITIONS = [
     types.Tool(
         name="kb_update",
         description=(
-            "Update existing KB entry content, title, topic, tags, verified "
-            "state, and trust_score"
+            "Update existing KB entry content, title, topic, tags, verified state, and trust_score"
         ),
         inputSchema={
             "type": "object",
@@ -1644,14 +1643,8 @@ def _finalize_search_response(
             query_embedding = None
 
     # Phase 4b: soft-penalise historically-poor docs for similar queries.
-    if (
-        telemetry.reranking_enabled()
-        and resp_data.get("results")
-        and query_embedding is not None
-    ):
-        resp_data["results"] = _apply_reranking_penalties(
-            resp_data["results"], query_embedding, db
-        )
+    if telemetry.reranking_enabled() and resp_data.get("results") and query_embedding is not None:
+        resp_data["results"] = _apply_reranking_penalties(resp_data["results"], query_embedding, db)
 
     results = resp_data.get("results") or []
     doc_ids = [r.get("kb_id") for r in results if r.get("kb_id")]
@@ -1732,9 +1725,7 @@ def _validate_trust_score(trust_score: float | None) -> dict | None:
     return None
 
 
-def _filter_by_min_trust_score(
-    results: list[dict], min_trust_score: float | None
-) -> list[dict]:
+def _filter_by_min_trust_score(results: list[dict], min_trust_score: float | None) -> list[dict]:
     """Drop results whose ``trust_score`` is below ``min_trust_score`` (Issue #14).
 
     Pure query-layer filter applied after results are fetched. A missing
@@ -2178,11 +2169,13 @@ def handle_refresh_hard_negatives(since=None, dry_run=False):
         if not telemetry.mining_enabled():
             return ResponseEnvelope.success(
                 "Hard negative mining disabled; no refresh performed",
-                {"skipped": True, "reason": "mining_disabled"}
+                {"skipped": True, "reason": "mining_disabled"},
             )
         result = telemetry.refresh_hard_negative_pairs(since=since, dry_run=bool(dry_run), db=db)
         if result is None:
-            return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable")
+            return ResponseEnvelope.error(
+                ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable"
+            )
         msg = f"{'[dry-run] ' if dry_run else ''}Processed {result['processed_telemetry_rows']} telemetry rows"
         return ResponseEnvelope.success(msg, result)
     except Exception as e:
@@ -2200,17 +2193,24 @@ def handle_get_hard_negatives(signal_type=None, limit=None, doc_id=None, query_t
             limit = telemetry.DEFAULT_HN_LIMIT
         limit = max(1, min(telemetry.MAX_HN_LIMIT, int(limit)))
         if signal_type and signal_type not in ("explicit", "behavioral", "all"):
-            return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT,
-                "signal_type must be 'explicit', 'behavioral', or 'all'")
+            return ResponseEnvelope.error(
+                ErrorCodes.INVALID_INPUT, "signal_type must be 'explicit', 'behavioral', or 'all'"
+            )
         effective_signal = None if signal_type == "all" else signal_type
         pairs = telemetry.fetch_hard_negatives(
-            signal_type=effective_signal, limit=limit,
-            doc_id=doc_id, query_text_like=query_text_like, db=db)
+            signal_type=effective_signal,
+            limit=limit,
+            doc_id=doc_id,
+            query_text_like=query_text_like,
+            db=db,
+        )
         if pairs is None:
-            return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable")
+            return ResponseEnvelope.error(
+                ErrorCodes.UNEXPECTED_EXCEPTION, "Telemetry backend unavailable"
+            )
         return ResponseEnvelope.success(
-            f"Found {len(pairs)} hard negative pair(s)",
-            {"pairs": pairs, "count": len(pairs)})
+            f"Found {len(pairs)} hard negative pair(s)", {"pairs": pairs, "count": len(pairs)}
+        )
     except Exception as e:
         logger.error(f"Error fetching hard negatives: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
@@ -2274,13 +2274,9 @@ def handle_kb_list(topic: str = None, limit: int = 100, offset: int = 0) -> dict
         limit = max(1, min(500, int(limit)))
         offset = max(0, int(offset))
 
-        query = (
-            db.table("knowledge.kb_entries")
-            .select(
-                "kb_id, topic, title, tags, author, source_type, verified, "
-                "trust_score, created_at",
-                count="exact",
-            )
+        query = db.table("knowledge.kb_entries").select(
+            "kb_id, topic, title, tags, author, source_type, verified, trust_score, created_at",
+            count="exact",
         )
 
         if topic:
@@ -2894,16 +2890,16 @@ def _journal_fts_postgres(
     # --- FTS attempt -------------------------------------------------------
     try:
         params = [query]
-        where = ["to_tsvector('english', coalesce(content,'')) "
-                 "@@ websearch_to_tsquery('english', %s)"]
+        where = [
+            "to_tsvector('english', coalesce(content,'')) @@ websearch_to_tsquery('english', %s)"
+        ]
         _append_filters()
         sql = (
             "SELECT entry_id, date, entry_type, tags, content, "
             "       ts_rank_cd(to_tsvector('english', coalesce(content,'')), "
             "                  websearch_to_tsquery('english', %s)) AS score "
             "FROM knowledge.journal_entries "
-            "WHERE " + " AND ".join(where) +
-            " ORDER BY score DESC NULLS LAST LIMIT %s"
+            "WHERE " + " AND ".join(where) + " ORDER BY score DESC NULLS LAST LIMIT %s"
         )
         # The rank %s is the first placeholder; prepend the query for it.
         fts_params = [query] + params + [int(limit)]
@@ -2924,8 +2920,7 @@ def _journal_fts_postgres(
     sql = (
         "SELECT entry_id, date, entry_type, tags, content "
         "FROM knowledge.journal_entries "
-        "WHERE " + " AND ".join(where) +
-        " ORDER BY date DESC, created_at DESC LIMIT %s"
+        "WHERE " + " AND ".join(where) + " ORDER BY date DESC, created_at DESC LIMIT %s"
     )
     params.append(int(limit))
     cursor = conn.cursor()

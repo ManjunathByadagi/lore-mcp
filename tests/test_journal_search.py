@@ -13,7 +13,6 @@ import pytest
 import lore.server as srv
 from lore.db_client import QueryResult
 
-
 # ---------------------------------------------------------------------------
 # Fluent fake db for the SQLite / lexical (ILIKE) path. Records the filters and
 # modifiers the handler applies, and returns configured rows.
@@ -21,7 +20,7 @@ from lore.db_client import QueryResult
 
 
 class _FakeSearchQuery:
-    def __init__(self, db: "_FakeSearchDb"):
+    def __init__(self, db: _FakeSearchDb):
         self._db = db
 
     def select(self, *_a, **_k):
@@ -109,10 +108,20 @@ def test_journal_search_basic_returns_required_fields(monkeypatch):
 def test_journal_search_score_present_in_all_results(monkeypatch):
     """Every returned row carries a numeric score."""
     rows = [
-        {"entry_id": "a", "date": "2026-05-01", "entry_type": "daily",
-         "tags": [], "content": "alpha beta gamma"},
-        {"entry_id": "b", "date": "2026-05-02", "entry_type": "daily",
-         "tags": [], "content": "beta beta delta"},
+        {
+            "entry_id": "a",
+            "date": "2026-05-01",
+            "entry_type": "daily",
+            "tags": [],
+            "content": "alpha beta gamma",
+        },
+        {
+            "entry_id": "b",
+            "date": "2026-05-02",
+            "entry_type": "daily",
+            "tags": [],
+            "content": "beta beta delta",
+        },
     ]
     monkeypatch.setattr(srv, "db", _FakeSearchDb(rows=rows))
 
@@ -126,10 +135,20 @@ def test_journal_search_score_present_in_all_results(monkeypatch):
 def test_journal_search_ranks_by_score_descending(monkeypatch):
     """Higher term-frequency content ranks above lower (relevance ordering)."""
     rows = [
-        {"entry_id": "low", "date": "2026-05-02", "entry_type": "daily",
-         "tags": [], "content": "beta once"},
-        {"entry_id": "high", "date": "2026-05-01", "entry_type": "daily",
-         "tags": [], "content": "beta beta beta thrice"},
+        {
+            "entry_id": "low",
+            "date": "2026-05-02",
+            "entry_type": "daily",
+            "tags": [],
+            "content": "beta once",
+        },
+        {
+            "entry_id": "high",
+            "date": "2026-05-01",
+            "entry_type": "daily",
+            "tags": [],
+            "content": "beta beta beta thrice",
+        },
     ]
     monkeypatch.setattr(srv, "db", _FakeSearchDb(rows=rows))
 
@@ -157,8 +176,13 @@ def test_journal_search_empty_result_count_zero(monkeypatch):
 def test_journal_search_limit_respected(monkeypatch):
     """limit is passed into the query and bounds the returned rows."""
     rows = [
-        {"entry_id": f"e{i}", "date": "2026-05-01", "entry_type": "daily",
-         "tags": [], "content": "match term here"}
+        {
+            "entry_id": f"e{i}",
+            "date": "2026-05-01",
+            "entry_type": "daily",
+            "tags": [],
+            "content": "match term here",
+        }
         for i in range(5)
     ]
     fake = _FakeSearchDb(rows=rows)
@@ -297,9 +321,7 @@ def test_journal_search_valid_iso_dates_accepted(monkeypatch):
     fake = _FakeSearchDb(rows=[])
     monkeypatch.setattr(srv, "db", fake)
 
-    resp = srv.handle_journal_search(
-        "term", date_from="2026-01-01", date_to="2026-06-30"
-    )
+    resp = srv.handle_journal_search("term", date_from="2026-01-01", date_to="2026-06-30")
     assert resp["ok"] is True
     assert ("gte", "date", "2026-01-01") in fake.filters
     assert ("lte", "date", "2026-06-30") in fake.filters
@@ -324,7 +346,7 @@ def test_journal_search_only_query_arg_does_not_error(monkeypatch):
 
 
 class _FakePgCursor:
-    def __init__(self, conn: "_FakePgConn"):
+    def __init__(self, conn: _FakePgConn):
         self._conn = conn
         self.description = None
         self._fetch: list[tuple] = []
@@ -337,14 +359,21 @@ class _FakePgCursor:
         # rows without a score column.
         if "ts_rank_cd" in sql:
             self.description = [
-                ("entry_id",), ("date",), ("entry_type",),
-                ("tags",), ("content",), ("score",),
+                ("entry_id",),
+                ("date",),
+                ("entry_type",),
+                ("tags",),
+                ("content",),
+                ("score",),
             ]
             self._fetch = self._conn.fts_rows
         else:
             self.description = [
-                ("entry_id",), ("date",), ("entry_type",),
-                ("tags",), ("content",),
+                ("entry_id",),
+                ("date",),
+                ("entry_type",),
+                ("tags",),
+                ("content",),
             ]
             self._fetch = self._conn.ilike_rows
 
@@ -379,8 +408,7 @@ def test_journal_search_postgres_fts_path(monkeypatch):
     monkeypatch.setenv("DB_BACKEND", "postgres")
     conn = _FakePgConn(
         fts_rows=[
-            ("jrnl_1", "2026-05-26", "session_summary",
-             ["hermes"], "hermes memory recall", 1.23),
+            ("jrnl_1", "2026-05-26", "session_summary", ["hermes"], "hermes memory recall", 1.23),
         ]
     )
     monkeypatch.setattr(srv, "db", _FakePgDb(conn))
@@ -477,8 +505,13 @@ def test_journal_search_routed_in_call_tool(monkeypatch):
 
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     rows = [
-        {"entry_id": "jrnl_x", "date": "2026-05-26", "entry_type": "daily",
-         "tags": ["t"], "content": "routing memory test"},
+        {
+            "entry_id": "jrnl_x",
+            "date": "2026-05-26",
+            "entry_type": "daily",
+            "tags": ["t"],
+            "content": "routing memory test",
+        },
     ]
     monkeypatch.setattr(srv, "db", _FakeSearchDb(rows=rows))
 
