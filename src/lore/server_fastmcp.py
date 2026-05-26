@@ -198,6 +198,7 @@ def kb_search(
     required_requery: bool = False,
     caller_agent: str | None = None,
     min_trust_score: float | None = None,
+    min_score: float | None = None,
 ) -> str:
     return _json(
         _srv.handle_kb_search(
@@ -212,6 +213,7 @@ def kb_search(
             required_requery=required_requery,
             caller_agent=caller_agent,
             min_trust_score=min_trust_score,
+            min_score=min_score,
         )
     )
 

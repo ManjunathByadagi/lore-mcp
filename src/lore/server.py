@@ -1533,6 +1533,12 @@ def handle_kb_add(
     ``trust_score`` (Issue #14) is a confidence signal in [0.0, 1.0] (default
     1.0). Out-of-range values are rejected with an invalid_input envelope.
     """
+    # Issue #14: normalise None -> 1.0 on the add path. _validate_trust_score
+    # treats None as "not provided" (a passthrough for the kb_update path), but
+    # for kb_add a None would slip past validation and then crash at
+    # float(None). Defaulting here keeps the documented default of 1.0.
+    if trust_score is None:
+        trust_score = 1.0
     # Issue #14: validate the confidence bound before touching the database.
     err = _validate_trust_score(trust_score)
     if err is not None:
@@ -1704,6 +1710,13 @@ def _validate_trust_score(trust_score: float | None) -> dict | None:
     """
     if trust_score is None:
         return None
+    # Issue #14: bool is a subclass of int, so float(True)==1.0 / float(False)==0.0
+    # would silently pass. Reject booleans explicitly before coercion.
+    if isinstance(trust_score, bool):
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "trust_score must be a float, not bool",
+        )
     try:
         value = float(trust_score)
     except (TypeError, ValueError):
@@ -2264,7 +2277,8 @@ def handle_kb_list(topic: str = None, limit: int = 100, offset: int = 0) -> dict
         query = (
             db.table("knowledge.kb_entries")
             .select(
-                "kb_id, topic, title, tags, author, source_type, verified, created_at",
+                "kb_id, topic, title, tags, author, source_type, verified, "
+                "trust_score, created_at",
                 count="exact",
             )
         )

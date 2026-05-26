@@ -1022,3 +1022,128 @@ def test_kb_search_min_trust_score_in_schema():
     assert mts["minimum"] == 0.0
     assert mts["maximum"] == 1.0
     assert "min_trust_score" not in schema.get("required", [])
+
+
+# ---------------------------------------------------------------------------
+# Code Critic WARN fixes (Issue #14):
+#   1. FastMCP kb_search forwards min_score (Issue #16 regression)
+#   2. kb_list SELECT includes trust_score
+#   3. _validate_trust_score rejects bool (no silent float(True)==1.0)
+#   4. kb_add with trust_score=None normalises to 1.0 (no float(None) crash)
+# ---------------------------------------------------------------------------
+
+
+# --- Finding 1: FastMCP wrapper forwards min_score ------------------------
+
+
+def test_fastmcp_kb_search_accepts_min_score():
+    """The FastMCP kb_search wrapper exposes a min_score parameter (Issue #16)."""
+    import inspect
+
+    import lore.server_fastmcp as fmcp
+
+    params = inspect.signature(fmcp.kb_search).parameters
+    assert "min_score" in params
+    # Optional with a None default for backward compatibility.
+    assert params["min_score"].default is None
+
+
+def test_fastmcp_kb_search_forwards_min_score(monkeypatch):
+    """The FastMCP wrapper passes min_score through to handle_kb_search."""
+    import lore.server_fastmcp as fmcp
+
+    captured: dict = {}
+
+    def _fake_handle_kb_search(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "data": {"results": []}}
+
+    monkeypatch.setattr(fmcp._srv, "handle_kb_search", _fake_handle_kb_search)
+
+    fmcp.kb_search("q", min_score=0.42, min_trust_score=0.7)
+    assert captured["min_score"] == 0.42
+    # min_trust_score still forwarded alongside (no regression).
+    assert captured["min_trust_score"] == 0.7
+
+
+# --- Finding 2: kb_list SELECT includes trust_score -----------------------
+
+
+class _SelectCapturingListQuery(_FakeListQuery):
+    """_FakeListQuery that records the column list passed to select()."""
+
+    def select(self, columns="*", **_k):
+        self._db.selected_columns = columns
+        return self
+
+
+class _SelectCapturingListDb(_FakeListDb):
+    def __init__(self, rows=None, total_count=0):
+        super().__init__(rows=rows, total_count=total_count)
+        self.selected_columns = None
+
+    def table(self, _name):
+        return _SelectCapturingListQuery(self)
+
+
+def test_kb_list_selects_trust_score_column(monkeypatch):
+    """kb_list's SELECT must name trust_score so clients can audit trust levels."""
+    fake = _SelectCapturingListDb(rows=[], total_count=0)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_list()
+    assert resp["ok"] is True
+    assert "trust_score" in fake.selected_columns
+
+
+def test_kb_list_returns_trust_score_in_entries(monkeypatch):
+    """A row's trust_score flows through to the kb_list response entries."""
+    rows = [{"kb_id": "kb_a", "title": "A", "trust_score": 0.6}]
+    fake = _FakeListDb(rows=rows, total_count=1)
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_kb_list()
+    assert resp["ok"] is True
+    assert resp["data"]["entries"][0]["trust_score"] == 0.6
+
+
+# --- Finding 3: _validate_trust_score rejects bool ------------------------
+
+
+def test_validate_trust_score_rejects_true():
+    """True must not be silently coerced to 1.0 -> invalid_input."""
+    err = srv._validate_trust_score(True)
+    assert err is not None
+    assert err["ok"] is False
+    assert err["error"] == "invalid_input"
+
+
+def test_validate_trust_score_rejects_false():
+    """False must not be silently coerced to 0.0 -> invalid_input."""
+    err = srv._validate_trust_score(False)
+    assert err is not None
+    assert err["ok"] is False
+    assert err["error"] == "invalid_input"
+
+
+def test_kb_add_bool_trust_score_rejected(monkeypatch):
+    """kb_add with trust_score=True is rejected and never reaches the DB."""
+    fake = _FakeInsertDb()
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_add(topic="t", title="T", content="c", trust_score=True)
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+    assert fake.inserted == []
+
+
+# --- Finding 4: kb_add with trust_score=None normalises to 1.0 ------------
+
+
+def test_kb_add_none_trust_score_normalises_to_one(monkeypatch):
+    """kb_add(trust_score=None) must default to 1.0 without raising TypeError."""
+    fake = _FakeInsertDb()
+    monkeypatch.setattr(srv, "db", fake)
+    resp = srv.handle_kb_add(topic="t", title="T", content="c", trust_score=None)
+    assert resp["ok"] is True
+    assert resp["data"]["trust_score"] == 1.0
+    assert fake.inserted[0]["trust_score"] == 1.0
