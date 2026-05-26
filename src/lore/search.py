@@ -264,16 +264,19 @@ def fts_search_postgres(
         "           websearch_to_tsquery('english', %s)"
         "       ) AS score "
         "FROM knowledge.kb_entries "
-        "WHERE to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')) "
-        "      @@ websearch_to_tsquery('english', %s) "
-        "   OR to_tsvector('simple', regexp_replace("
+        "WHERE ("
+        "    to_tsvector('english', coalesce(title,'') || ' ' || coalesce(content,'')) "
+        "    @@ websearch_to_tsquery('english', %s) "
+        "    OR to_tsvector('simple', regexp_replace("
         "               coalesce(title,'') || ' ' || coalesce(content,''),"
         "               '[.,/\\\\:_-]', ' ', 'g')) "
-        "      @@ plainto_tsquery('simple', regexp_replace(%s,"
+        "       @@ plainto_tsquery('simple', regexp_replace(%s,"
         "               '[.,/\\\\:_-]', ' ', 'g'))"
+        ")"
     )
     params: list[Any] = [query, query, query]
     if topic:
+        # AND applies to the entire OR expression because it is parenthesised above.
         sql += " AND topic = %s"
         params.append(topic)
     sql += " ORDER BY score DESC NULLS LAST LIMIT %s"
