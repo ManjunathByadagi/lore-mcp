@@ -306,7 +306,7 @@ def investigation_list_experiments() -> str:
     return _json(_srv.handle_investigation_list_experiments())
 
 
-# --- Journal (4) -----------------------------------------------------------
+# --- Journal (5) -----------------------------------------------------------
 
 
 @mcp.tool(description="Append journal entry")
@@ -328,6 +328,25 @@ def journal_list(limit: int = 20) -> str:
 @mcp.tool(description="Get journal entry")
 def journal_get(entry_id: str) -> str:
     return _json(_srv.handle_journal_get(entry_id=entry_id))
+
+
+@mcp.tool(description="Full-text search across journal entry content (Issue #15)")
+def journal_search(
+    query: str,
+    limit: int = 20,
+    entry_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str:
+    return _json(
+        _srv.handle_journal_search(
+            query=query,
+            limit=limit,
+            entry_type=entry_type,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )
 
 
 @mcp.tool(description="Snapshot current config")

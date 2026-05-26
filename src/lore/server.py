@@ -490,6 +490,36 @@ _TOOL_DEFINITIONS = [
         },
     ),
     types.Tool(
+        name="journal_search",
+        description="Full-text search across journal entry content (Issue #15)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Full-text search query"},
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Max results",
+                },
+                "entry_type": {
+                    "type": "string",
+                    "description": "Filter by entry type (optional)",
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": "ISO date lower bound e.g. 2026-01-01 (optional)",
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": "ISO date upper bound (optional)",
+                },
+            },
+            "required": ["query"],
+        },
+    ),
+    types.Tool(
         name="snapshot_config",
         description="Snapshot current config",
         inputSchema={
@@ -1103,6 +1133,8 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent]:
             return format_response(handle_journal_list(**arguments))
         elif name == "journal_get":
             return format_response(handle_journal_get(**arguments))
+        elif name == "journal_search":
+            return format_response(handle_journal_search(**arguments))
         elif name == "snapshot_config":
             return format_response(handle_snapshot_config(**arguments))
 
@@ -2553,6 +2585,202 @@ def handle_journal_get(entry_id: str) -> dict:
     except Exception as e:
         logger.error(f"Error getting journal entry: {e}")
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+def _journal_like_score(content: str, query: str) -> float:
+    """Heuristic relevance score for the LIKE/ILIKE journal-search fallback.
+
+    The KB FTS5/pgvector paths carry a real per-row score; journal entries have
+    no FTS index, so we derive a lightweight score from term-occurrence counts.
+    Returns the total number of (case-insensitive) query-term hits in ``content``,
+    normalised to a float so the field type matches the FTS paths. A whole-query
+    phrase match adds a bonus so phrase hits rank above scattered term hits.
+    """
+    if not content:
+        return 0.0
+    haystack = content.lower()
+    q = query.lower().strip()
+    if not q:
+        return 0.0
+    score = float(haystack.count(q))  # phrase-match bonus (whole query)
+    for term in {t for t in q.split() if t}:
+        score += float(haystack.count(term))
+    return score
+
+
+def handle_journal_search(
+    query: str,
+    limit: int = 20,
+    entry_type: str = None,
+    date_from: str = None,
+    date_to: str = None,
+) -> dict:
+    """Full-text search across journal entry content (Issue #15).
+
+    Journal entries were previously only date-browsable (``journal_list`` /
+    ``journal_get``); this enables content-based recall. Optional ``entry_type``,
+    ``date_from`` and ``date_to`` (ISO ``YYYY-MM-DD``) filters narrow results.
+
+    Backend behaviour:
+      * **PostgreSQL** — ranked FTS via ``websearch_to_tsquery`` / ``ts_rank_cd``
+        over ``content``; degrades to ``ILIKE`` if the FTS query errors.
+      * **SQLite / other** — there is no journal FTS5 index, so the query-layer
+        ``ILIKE`` (case-insensitive ``LIKE '%query%'``) fallback is used, mirroring
+        the kb_search degradation path. A heuristic ``score`` is attached so the
+        response shape matches the FTS path.
+
+    Every result includes ``entry_id``, ``date``, ``entry_type``, ``tags``,
+    ``content`` and ``score``. ``count`` reflects the number of returned rows.
+    """
+    try:
+        # Bound limit defensively (schema constrains 1..200, but internal callers
+        # may bypass the schema). Default 20; reject sub-1 limits.
+        try:
+            limit_int = int(limit)
+        except (TypeError, ValueError):
+            limit_int = 20
+        if limit_int < 1:
+            return ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, "limit must be at least 1")
+        limit_int = min(200, limit_int)
+
+        backend = os.getenv("DB_BACKEND", "").strip().lower()
+        is_postgres = backend in {"local", "postgres", "postgresql"}
+
+        # PostgreSQL ranked FTS path (uses to_tsvector/websearch_to_tsquery over
+        # content; degrades to ILIKE on FTS error). Raw SQL because the journal
+        # table has no FTS helper in search.py and we want a real rank score.
+        if is_postgres:
+            rows = _journal_fts_postgres(query, limit_int, entry_type, date_from, date_to)
+            return ResponseEnvelope.success(
+                f"Found {len(rows)} journal entries",
+                {
+                    "results": rows,
+                    "count": len(rows),
+                    "search_mode": "fts",
+                    "backend": "postgres",
+                },
+            )
+
+        # SQLite / default lexical (ILIKE) path. No journal FTS5 index exists, so
+        # this is the documented degradation path (same shape as kb_search LIKE).
+        safe_query = _sanitize_search_query(query)
+
+        query_builder = db.table("knowledge.journal_entries").select(
+            "entry_id, date, entry_type, tags, content"
+        )
+        if entry_type:
+            query_builder = query_builder.eq("entry_type", entry_type)
+        if date_from:
+            query_builder = query_builder.gte("date", date_from)
+        if date_to:
+            query_builder = query_builder.lte("date", date_to)
+
+        # Case-insensitive substring match on content. A blank sanitized query
+        # (e.g. query was only operator tokens) matches everything via "%%".
+        query_builder = query_builder.ilike("content", f"%{safe_query}%")
+        query_builder = query_builder.order("date", desc=True).order("created_at", desc=True)
+
+        result = query_builder.limit(limit_int).execute()
+        rows = list(result.data or [])
+
+        # Attach a heuristic score and re-rank by it (descending), preserving the
+        # date-ordered fetch as a stable tiebreak. Limit again post-scoring.
+        for row in rows:
+            row["score"] = _journal_like_score(row.get("content", ""), query)
+        rows.sort(key=lambda r: r.get("score", 0.0), reverse=True)
+        rows = rows[:limit_int]
+
+        return ResponseEnvelope.success(
+            f"Found {len(rows)} journal entries",
+            {
+                "results": rows,
+                "count": len(rows),
+                "search_mode": "fts",
+            },
+        )
+    except Exception as e:
+        logger.error(f"Error searching journal: {e}")
+        return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
+
+
+def _journal_fts_postgres(
+    query: str,
+    limit: int,
+    entry_type: str = None,
+    date_from: str = None,
+    date_to: str = None,
+) -> list[dict]:
+    """PostgreSQL ranked FTS over journal content; degrades to ILIKE on error.
+
+    Returns rows with entry_id, date, entry_type, tags, content and a numeric
+    ``score`` (``ts_rank_cd`` for the FTS path, term-count heuristic for the
+    ILIKE fallback). Raises nothing on a failed FTS query — it falls back so a
+    misconfigured text-search config never breaks search entirely.
+    """
+    conn = db._get_connection()
+
+    where: list[str] = []
+    params: list[Any] = []
+
+    def _append_filters() -> None:
+        if entry_type:
+            where.append("entry_type = %s")
+            params.append(entry_type)
+        if date_from:
+            where.append("date >= %s")
+            params.append(date_from)
+        if date_to:
+            where.append("date <= %s")
+            params.append(date_to)
+
+    # --- FTS attempt -------------------------------------------------------
+    try:
+        params = [query]
+        where = ["to_tsvector('english', coalesce(content,'')) "
+                 "@@ websearch_to_tsquery('english', %s)"]
+        _append_filters()
+        sql = (
+            "SELECT entry_id, date, entry_type, tags, content, "
+            "       ts_rank_cd(to_tsvector('english', coalesce(content,'')), "
+            "                  websearch_to_tsquery('english', %s)) AS score "
+            "FROM knowledge.journal_entries "
+            "WHERE " + " AND ".join(where) +
+            " ORDER BY score DESC NULLS LAST LIMIT %s"
+        )
+        # The rank %s is the first placeholder; prepend the query for it.
+        fts_params = [query] + params + [int(limit)]
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql, fts_params)
+            col_names = [d[0] for d in cursor.description]
+            return [dict(zip(col_names, raw)) for raw in cursor.fetchall()]
+        finally:
+            cursor.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Journal PG FTS failed for %r, falling back to ILIKE: %s", query, exc)
+
+    # --- ILIKE fallback ----------------------------------------------------
+    params = [f"%{query}%"]
+    where = ["content ILIKE %s"]
+    _append_filters()
+    sql = (
+        "SELECT entry_id, date, entry_type, tags, content "
+        "FROM knowledge.journal_entries "
+        "WHERE " + " AND ".join(where) +
+        " ORDER BY date DESC, created_at DESC LIMIT %s"
+    )
+    params.append(int(limit))
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, params)
+        col_names = [d[0] for d in cursor.description]
+        rows = [dict(zip(col_names, raw)) for raw in cursor.fetchall()]
+    finally:
+        cursor.close()
+    for row in rows:
+        row["score"] = _journal_like_score(row.get("content", ""), query)
+    rows.sort(key=lambda r: r.get("score", 0.0), reverse=True)
+    return rows
 
 
 def handle_snapshot_config(config_name: str, config_data: dict) -> dict:
