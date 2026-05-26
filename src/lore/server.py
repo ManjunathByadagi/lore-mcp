@@ -326,7 +326,10 @@ _TOOL_DEFINITIONS = [
                         "Minimum relevance score threshold. Results below this "
                         "score are excluded. For hybrid mode uses rrf_score; for "
                         "fts/semantic uses score. Range 0.0-1.0 for "
-                        "semantic/hybrid; unbounded for raw fts."
+                        "semantic/hybrid; unbounded for raw fts. Note: SQLite FTS5 "
+                        "uses bm25() scores which are negative (e.g. -1.5 to 0.0); "
+                        "set min_score to a negative value on the fts path, or use "
+                        "hybrid/semantic modes for intuitive 0.0-1.0 scoring."
                     ),
                 },
             },
@@ -1599,10 +1602,18 @@ def _filter_by_min_score(
     """
     if min_score is None:
         return results
-    if search_mode == "hybrid":
-        return [r for r in results if r.get("rrf_score", 0.0) >= min_score]
-    # fts or semantic
-    return [r for r in results if r.get("score", 0.0) >= min_score]
+    score_field = "rrf_score" if search_mode == "hybrid" else "score"
+    filtered: list[dict] = []
+    for r in results:
+        if score_field not in r:
+            logger.debug(
+                "result missing expected score field %r, defaulting to 0.0: %s",
+                score_field,
+                r,
+            )
+        if r.get(score_field, 0.0) >= min_score:
+            filtered.append(r)
+    return filtered
 
 
 def handle_kb_search(

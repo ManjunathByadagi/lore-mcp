@@ -663,6 +663,64 @@ def test_kb_search_hybrid_min_score_filters_on_rrf_score(monkeypatch):
     assert resp["data"]["count"] == len(resp["data"]["results"])
 
 
+def test_kb_search_postgres_fts_min_score_filters_and_counts(monkeypatch):
+    """PostgreSQL fts path: results below min_score excluded; count = filtered len."""
+    monkeypatch.setenv("DB_BACKEND", "postgres")
+    monkeypatch.setattr(srv, "db", _make_search_db())
+    monkeypatch.setattr(
+        srch,
+        "fts_search_postgres",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "score": 0.9, "content": "x"},
+            {"kb_id": "b", "title": "B", "score": 0.4, "content": "y"},
+            {"kb_id": "c", "title": "C", "score": 0.6, "content": "z"},
+        ],
+    )
+
+    resp = srv.handle_kb_search("q", search_mode="fts", min_score=0.5)
+    assert resp["ok"] is True
+    assert resp["data"]["search_mode"] == "fts"
+    assert resp["data"]["backend"] == "postgres"
+    kept_ids = [r["kb_id"] for r in resp["data"]["results"]]
+    assert kept_ids == ["a", "c"]  # b (0.4) dropped
+    # count reflects the POST-filter total, not the pre-filter 3.
+    assert resp["data"]["count"] == 2
+    assert resp["data"]["count"] == len(resp["data"]["results"])
+
+
+def test_kb_search_postgres_hybrid_min_score_filters_on_rrf_score(monkeypatch):
+    """PostgreSQL hybrid path: filtering uses rrf_score, count = filtered len."""
+    monkeypatch.setenv("DB_BACKEND", "postgres")
+    monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
+    # Postgres vector path needs semantic enabled + vec extension loaded.
+    monkeypatch.setattr(srv, "db", _make_search_db(vec=True))
+    monkeypatch.setattr(srch, "semantic_enabled", lambda: True)
+    monkeypatch.setattr(srch, "rrf_k", lambda: 60)
+    # Avoid loading any embedding model.
+    import lore.embeddings as _emb
+
+    monkeypatch.setattr(_emb, "get_model_name", lambda: "fake-model")
+    monkeypatch.setattr(_emb, "encode_text", lambda _q: [0.0] * 4)
+    monkeypatch.setattr(
+        srch,
+        "hybrid_search_postgres",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "rrf_score": 0.05},
+            {"kb_id": "b", "title": "B", "rrf_score": 0.01},
+            {"kb_id": "c", "title": "C", "rrf_score": 0.03},
+        ],
+    )
+
+    resp = srv.handle_kb_search("q", search_mode="hybrid", min_score=0.025)
+    assert resp["ok"] is True
+    assert resp["data"]["search_mode"] == "hybrid"
+    assert resp["data"]["backend"] == "postgres"
+    kept_ids = [r["kb_id"] for r in resp["data"]["results"]]
+    assert kept_ids == ["a", "c"]  # b (0.01) dropped
+    assert resp["data"]["count"] == 2
+    assert resp["data"]["count"] == len(resp["data"]["results"])
+
+
 def test_kb_search_min_score_in_schema():
     """The kb_search inputSchema must expose an optional numeric min_score."""
     schema = srv._TOOL_SCHEMA_MAP["kb_search"]
