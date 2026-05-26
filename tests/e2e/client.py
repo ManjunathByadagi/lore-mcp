@@ -245,7 +245,7 @@ class LoreClient:
         Returns:
             Unwrapped update-result dict.
         """
-        return self.tool("kb_update", {"entry_id": kb_id, **kw})
+        return self.tool("kb_update", {"kb_id": kb_id, **kw})
 
     def kb_delete(self, kb_id: str, confirm: bool = True) -> dict[str, Any]:
         """Delete a knowledge-base entry.
@@ -257,7 +257,7 @@ class LoreClient:
         Returns:
             Unwrapped deletion-confirmation dict.
         """
-        return self.tool("kb_delete", {"entry_id": kb_id, "confirm": confirm})
+        return self.tool("kb_delete", {"kb_id": kb_id, "confirm": confirm})
 
     def kb_list(self, **kw: Any) -> dict[str, Any]:
         """List knowledge-base entries.
