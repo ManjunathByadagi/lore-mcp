@@ -62,6 +62,8 @@ semantic = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-timeout>=2.1.0",
     "httpx>=0.24.0",
     "pyyaml>=6.0",
     "black>=23.0.0",
@@ -78,6 +80,7 @@ test = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
+    "pytest-timeout>=2.1.0",
     "httpx>=0.24.0",
     "factory-boy>=3.3.0",
 ]
@@ -151,11 +154,30 @@ indent-style = "space"
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --strict-markers"
+# --cov flags require pytest-cov (provided by the [dev] and [test] extras).
+# --cov-fail-under enforces the coverage floor automatically in CI.
+addopts = "-ra -q --strict-markers --cov=lore --cov-report=term-missing --cov-fail-under=30"
 testpaths = ["tests"]
+# NOTE: This suite intentionally does NOT use pytest-asyncio. Async handlers are
+# driven via asyncio.run() inside sync test functions, so asyncio_mode is omitted
+# on purpose — there are no `async def test_*` functions to collect.
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "e2e: end-to-end tests requiring a live Lore server (set LORE_E2E_URL)",
+]
+# Prevent a hung test (e.g. a stalled network call in e2e/integration) from
+# blocking CI indefinitely.
+timeout = 30
+# Surface relevant logs on failure without flooding passing runs.
+log_cli = true
+log_cli_level = "WARNING"
+log_level = "DEBUG"
+filterwarnings = [
+    # Known third-party deprecation we cannot fix from here: OpenTelemetry uses
+    # the deprecated importlib.metadata SelectableGroups API. Suppress so the
+    # suite reports a clean (0-warning) run.
+    "ignore:SelectableGroups dict interface is deprecated:DeprecationWarning",
 ]
 
 [tool.coverage.run]
@@ -163,6 +185,9 @@ source = ["src"]
 branch = true
 
 [tool.coverage.report]
+# Coverage floor — set to the current measured coverage (31%) rounded down to
+# the nearest 5. Raise this as the integration/e2e gaps get unit-test coverage.
+fail_under = 30
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
