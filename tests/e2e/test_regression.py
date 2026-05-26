@@ -130,14 +130,18 @@ class TestRegressionCorpus:
         expect_match: bool = query.get("expect_match", True)
         max_rank: int | None = query.get("max_rank")
 
-        # Searches are topic-scoped so the seeded entry only competes against
+        # Topic-scope positive queries so the seeded entry only competes against
         # itself — making rank assertions deterministic regardless of how many
         # entries exist in the broader database.  self._topic is a UUID-suffixed
         # slug that is unique per parametrised test run (set in _seed_and_cleanup).
+        # False-negative queries must run against the full corpus — a single-document
+        # topic always returns that document, making "should NOT appear" checks
+        # meaningless (vacuously pass or fail non-deterministically).
         # top_k must cover this query's own max_rank and the false-negative
         # inspection window (_TOP_N_FALSE_NEG), with a sane floor of 10.
         top_k = max(max_rank or 0, _TOP_N_FALSE_NEG, 10)
-        result = client.kb_search(q_text, search_mode=mode, top_k=top_k, topic=self._topic)
+        topic_filter = self._topic if expect_match else None
+        result = client.kb_search(q_text, search_mode=mode, top_k=top_k, topic=topic_filter)
         results = _get_results(result)
         rank = _find_rank(results, self._seeded_id)
 
