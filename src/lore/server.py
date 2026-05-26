@@ -320,6 +320,18 @@ _TOOL_DEFINITIONS = [
                         "(retrieval telemetry, issue #5)."
                     ),
                 },
+                "min_score": {
+                    "type": "number",
+                    "description": (
+                        "Minimum relevance score threshold. Results below this "
+                        "score are excluded. For hybrid mode uses rrf_score; for "
+                        "fts/semantic uses score. Range 0.0-1.0 for "
+                        "semantic/hybrid; unbounded for raw fts. Note: SQLite FTS5 "
+                        "uses bm25() scores which are negative (e.g. -1.5 to 0.0); "
+                        "set min_score to a negative value on the fts path, or use "
+                        "hybrid/semantic modes for intuitive 0.0-1.0 scoring."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -1577,6 +1589,33 @@ def _finalize_search_response(
     return resp_data
 
 
+def _filter_by_min_score(
+    results: list[dict], search_mode: str, min_score: float | None
+) -> list[dict]:
+    """Drop results scoring below ``min_score`` (Issue #16).
+
+    Pure query-layer filter applied after results are fetched and scored.
+    ``hybrid`` mode filters on each result's ``rrf_score``; ``fts`` and
+    ``semantic`` modes filter on ``score``. Missing scores default to 0.0.
+    When ``min_score`` is None this is a no-op (returns the list unchanged),
+    preserving backward compatibility.
+    """
+    if min_score is None:
+        return results
+    score_field = "rrf_score" if search_mode == "hybrid" else "score"
+    filtered: list[dict] = []
+    for r in results:
+        if score_field not in r:
+            logger.debug(
+                "result missing expected score field %r, defaulting to 0.0: %s",
+                score_field,
+                r,
+            )
+        if r.get(score_field, 0.0) >= min_score:
+            filtered.append(r)
+    return filtered
+
+
 def handle_kb_search(
     query: str,
     topic: str = None,
@@ -1588,6 +1627,7 @@ def handle_kb_search(
     parent_query_id: str = None,
     required_requery: bool = False,
     caller_agent: str = None,
+    min_score: float = None,
 ) -> dict:
     """Search KB entries.
 
@@ -1599,6 +1639,11 @@ def handle_kb_search(
 
     Semantic and hybrid modes require ``LORE_SEMANTIC_SEARCH=true`` and the
     [semantic] extras. When unavailable, the call degrades to lexical search.
+
+    ``min_score`` (Issue #16): when set, results scoring below the threshold are
+    excluded server-side and ``count`` reflects the post-filter total. Hybrid
+    mode filters on ``rrf_score``; fts/semantic filter on ``score``. None (the
+    default) disables filtering for full backward compatibility.
     """
     try:
         from lore import search as _search  # local import: tolerant of degraded envs
@@ -1684,6 +1729,8 @@ def handle_kb_search(
                 search_mode=effective_mode,
                 encode_query=_encode_query,
             )
+            # Issue #16: drop results below the relevance threshold (post-filter).
+            results = _filter_by_min_score(results, effective_mode, min_score)
             resp_data: dict = {
                 "results": results,
                 "count": len(results),
@@ -1718,6 +1765,8 @@ def handle_kb_search(
                 search_mode=requested_mode,
                 encode_query=_encode_query_pg,
             )
+            # Issue #16: drop results below the relevance threshold (post-filter).
+            results = _filter_by_min_score(results, requested_mode, min_score)
             resp_data = {
                 "results": results,
                 "count": len(results),
@@ -1739,6 +1788,8 @@ def handle_kb_search(
             results = _search.fts5_search_sqlite(db, query, topic, top_k_int)
             # Strip content from response (consistent with hybrid path).
             results = [{k: v for k, v in r.items() if k != "content"} for r in results]
+            # Issue #16: drop results below the relevance threshold (post-filter).
+            results = _filter_by_min_score(results, "fts", min_score)
             resp_data = {
                 "results": results,
                 "count": len(results),
@@ -1754,6 +1805,8 @@ def handle_kb_search(
         if is_postgres and requested_mode == "fts":
             pg_rows = _search.fts_search_postgres(db, query, topic, top_k_int)
             pg_rows = [{k: v for k, v in r.items() if k != "content"} for r in pg_rows]
+            # Issue #16: drop results below the relevance threshold (post-filter).
+            pg_rows = _filter_by_min_score(pg_rows, "fts", min_score)
             resp_data = {
                 "results": pg_rows,
                 "count": len(pg_rows),
@@ -1788,9 +1841,15 @@ def handle_kb_search(
 
         result = query_builder.limit(max(top_k_int, 50)).execute()
 
+        # Issue #16: drop results below the relevance threshold (post-filter).
+        # The legacy lexical path carries no per-row score, so any positive
+        # min_score excludes everything (score defaults to 0.0); min_score=0.0
+        # and min_score=None both pass all rows through.
+        lexical_results = _filter_by_min_score(list(result.data), "fts", min_score)
+
         envelope_data = {
-            "results": result.data,
-            "count": len(result.data),
+            "results": lexical_results,
+            "count": len(lexical_results),
             "search_mode": "fts",
             "requested_mode": requested_mode,
         }
@@ -1803,7 +1862,7 @@ def handle_kb_search(
             )
 
         return ResponseEnvelope.success(
-            f"Found {len(result.data)} KB entries",
+            f"Found {len(lexical_results)} KB entries",
             _finalize_search_response(envelope_data, **_telemetry_ctx),
         )
     except Exception as e:
