@@ -99,7 +99,7 @@ def test_journal_search_basic_returns_required_fields(monkeypatch):
     resp = srv.handle_journal_search("memory")
     assert resp["ok"] is True
     assert resp["data"]["count"] == 1
-    result = resp["data"]["results"][0]
+    result = resp["data"]["entries"][0]
     for field in ("entry_id", "date", "entry_type", "tags", "content", "score"):
         assert field in result, f"missing field {field}"
     assert result["entry_id"] == "jrnl_1"
@@ -118,7 +118,7 @@ def test_journal_search_score_present_in_all_results(monkeypatch):
 
     resp = srv.handle_journal_search("beta")
     assert resp["ok"] is True
-    for r in resp["data"]["results"]:
+    for r in resp["data"]["entries"]:
         assert "score" in r
         assert isinstance(r["score"], (int, float))
 
@@ -134,7 +134,7 @@ def test_journal_search_ranks_by_score_descending(monkeypatch):
     monkeypatch.setattr(srv, "db", _FakeSearchDb(rows=rows))
 
     resp = srv.handle_journal_search("beta")
-    ids = [r["entry_id"] for r in resp["data"]["results"]]
+    ids = [r["entry_id"] for r in resp["data"]["entries"]]
     # "high" (3 hits) should sort before "low" (1 hit) despite later date order.
     assert ids == ["high", "low"]
 
@@ -145,7 +145,7 @@ def test_journal_search_empty_result_count_zero(monkeypatch):
 
     resp = srv.handle_journal_search("nonexistent-term")
     assert resp["ok"] is True
-    assert resp["data"]["results"] == []
+    assert resp["data"]["entries"] == []
     assert resp["data"]["count"] == 0
 
 
@@ -170,7 +170,7 @@ def test_journal_search_limit_respected(monkeypatch):
     assert fake.applied_limit == 3
     # ...and the post-scoring slice respects it too.
     assert resp["data"]["count"] == 3
-    assert len(resp["data"]["results"]) == 3
+    assert len(resp["data"]["entries"]) == 3
 
 
 def test_journal_search_limit_clamped_to_max(monkeypatch):
@@ -254,6 +254,57 @@ def test_journal_search_applies_ilike_on_content(monkeypatch):
     assert ilikes[0][2] == "%memory%"
 
 
+def test_journal_search_sqlite_response_metadata(monkeypatch):
+    """The SQLite/lexical path labels itself ``ilike`` with backend ``sqlite``."""
+    monkeypatch.setattr(srv, "db", _FakeSearchDb(rows=[]))
+
+    resp = srv.handle_journal_search("memory")
+    assert resp["ok"] is True
+    assert resp["data"]["search_mode"] == "ilike"
+    assert resp["data"]["backend"] == "sqlite"
+
+
+# ---------------------------------------------------------------------------
+# Date format validation (rejected before any filtering)
+# ---------------------------------------------------------------------------
+
+
+def test_journal_search_invalid_date_from_rejected(monkeypatch):
+    """A malformed date_from returns invalid_input and runs no query."""
+    fake = _FakeSearchDb(rows=[])
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_journal_search("term", date_from="not-a-date")
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+    # Validation happens before filtering — no query was issued.
+    assert fake.filters == []
+
+
+def test_journal_search_invalid_date_to_rejected(monkeypatch):
+    """A malformed date_to returns invalid_input and runs no query."""
+    fake = _FakeSearchDb(rows=[])
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_journal_search("term", date_to="2026-13-40")
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+    assert fake.filters == []
+
+
+def test_journal_search_valid_iso_dates_accepted(monkeypatch):
+    """Well-formed ISO date bounds pass validation and apply as filters."""
+    fake = _FakeSearchDb(rows=[])
+    monkeypatch.setattr(srv, "db", fake)
+
+    resp = srv.handle_journal_search(
+        "term", date_from="2026-01-01", date_to="2026-06-30"
+    )
+    assert resp["ok"] is True
+    assert ("gte", "date", "2026-01-01") in fake.filters
+    assert ("lte", "date", "2026-06-30") in fake.filters
+
+
 # ---------------------------------------------------------------------------
 # Backward compatibility — missing optional params don't error
 # ---------------------------------------------------------------------------
@@ -264,7 +315,7 @@ def test_journal_search_only_query_arg_does_not_error(monkeypatch):
     monkeypatch.setattr(srv, "db", _FakeSearchDb(rows=[]))
     resp = srv.handle_journal_search("anything")
     assert resp["ok"] is True
-    assert "results" in resp["data"]
+    assert "entries" in resp["data"]
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +389,7 @@ def test_journal_search_postgres_fts_path(monkeypatch):
     assert resp["ok"] is True
     assert resp["data"]["backend"] == "postgres"
     assert resp["data"]["count"] == 1
-    row = resp["data"]["results"][0]
+    row = resp["data"]["entries"][0]
     assert row["entry_id"] == "jrnl_1"
     assert row["score"] == 1.23
     for field in ("entry_id", "date", "entry_type", "tags", "content", "score"):
@@ -379,7 +430,7 @@ def test_journal_search_postgres_degrades_to_ilike(monkeypatch):
     resp = srv.handle_journal_search("memory")
     assert resp["ok"] is True
     assert resp["data"]["count"] == 1
-    row = resp["data"]["results"][0]
+    row = resp["data"]["entries"][0]
     assert row["entry_id"] == "jrnl_2"
     # Fallback attaches a heuristic score (not from SQL).
     assert "score" in row
@@ -435,4 +486,4 @@ def test_journal_search_routed_in_call_tool(monkeypatch):
     payload = json.loads(out[0].text)
     assert payload["ok"] is True
     assert payload["data"]["count"] == 1
-    assert payload["data"]["results"][0]["entry_id"] == "jrnl_x"
+    assert payload["data"]["entries"][0]["entry_id"] == "jrnl_x"

@@ -509,10 +509,12 @@ _TOOL_DEFINITIONS = [
                 },
                 "date_from": {
                     "type": "string",
+                    "format": "date",
                     "description": "ISO date lower bound e.g. 2026-01-01 (optional)",
                 },
                 "date_to": {
                     "type": "string",
+                    "format": "date",
                     "description": "ISO date upper bound (optional)",
                 },
             },
@@ -2633,6 +2635,29 @@ def handle_journal_search(
     ``content`` and ``score``. ``count`` reflects the number of returned rows.
     """
     try:
+        # Validate ISO date filters before applying any filtering. Reject
+        # malformed dates up front so callers get an actionable error rather
+        # than silently-ignored or backend-specific failures.
+        from datetime import date as _date
+
+        if date_from is not None:
+            try:
+                _date.fromisoformat(date_from)
+            except ValueError:
+                return ResponseEnvelope.error(
+                    ErrorCodes.INVALID_INPUT,
+                    f"date_from must be ISO format (YYYY-MM-DD), got: {date_from!r}",
+                )
+
+        if date_to is not None:
+            try:
+                _date.fromisoformat(date_to)
+            except ValueError:
+                return ResponseEnvelope.error(
+                    ErrorCodes.INVALID_INPUT,
+                    f"date_to must be ISO format (YYYY-MM-DD), got: {date_to!r}",
+                )
+
         # Bound limit defensively (schema constrains 1..200, but internal callers
         # may bypass the schema). Default 20; reject sub-1 limits.
         try:
@@ -2654,7 +2679,7 @@ def handle_journal_search(
             return ResponseEnvelope.success(
                 f"Found {len(rows)} journal entries",
                 {
-                    "results": rows,
+                    "entries": rows,
                     "count": len(rows),
                     "search_mode": "fts",
                     "backend": "postgres",
@@ -2693,9 +2718,10 @@ def handle_journal_search(
         return ResponseEnvelope.success(
             f"Found {len(rows)} journal entries",
             {
-                "results": rows,
+                "entries": rows,
                 "count": len(rows),
-                "search_mode": "fts",
+                "search_mode": "ilike",
+                "backend": "sqlite",
             },
         )
     except Exception as e:
