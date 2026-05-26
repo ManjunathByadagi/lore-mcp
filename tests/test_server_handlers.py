@@ -10,6 +10,7 @@ from __future__ import annotations
 import psycopg2
 import pytest
 
+import lore.search as srch
 import lore.server as srv
 from lore.db_client import QueryResult
 
@@ -467,3 +468,205 @@ def test_kb_sync_status_no_dir_no_env_returns_not_configured(monkeypatch):
 def test_kb_sync_status_schema_dir_path_optional():
     schema = srv._TOOL_SCHEMA_MAP["kb_sync_status"]
     assert "dir_path" not in schema.get("required", [])
+
+
+# ---------------------------------------------------------------------------
+# Issue #16: kb_search min_score relevance threshold filter
+#
+# Pure query-layer addition. hybrid mode filters on rrf_score; fts/semantic
+# filter on score. count in the response reflects the post-filter total.
+# ---------------------------------------------------------------------------
+
+
+# --- Unit tests for the _filter_by_min_score helper -----------------------
+
+
+def test_min_score_none_is_noop_no_filtering():
+    """min_score=None returns the list unchanged (backward compat)."""
+    rows = [
+        {"kb_id": "a", "score": 0.9},
+        {"kb_id": "b", "score": 0.1},
+        {"kb_id": "c"},  # missing score entirely
+    ]
+    out = srv._filter_by_min_score(rows, "fts", None)
+    assert out == rows  # identical, nothing dropped
+
+
+def test_min_score_zero_passes_all_results_boundary():
+    """min_score=0.0 keeps every result whose score >= 0.0 (boundary)."""
+    rows = [
+        {"kb_id": "a", "score": 0.9},
+        {"kb_id": "b", "score": 0.0},  # exactly at threshold -> kept
+    ]
+    out = srv._filter_by_min_score(rows, "fts", 0.0)
+    assert [r["kb_id"] for r in out] == ["a", "b"]
+
+
+def test_min_score_one_keeps_only_perfect_score():
+    """min_score=1.0 keeps only results scoring >= 1.0 (boundary)."""
+    rows = [
+        {"kb_id": "a", "score": 1.0},  # exactly perfect -> kept
+        {"kb_id": "b", "score": 0.99},  # just under -> dropped
+        {"kb_id": "c", "score": 0.5},
+    ]
+    out = srv._filter_by_min_score(rows, "fts", 1.0)
+    assert [r["kb_id"] for r in out] == ["a"]
+
+
+def test_min_score_hybrid_filters_on_rrf_score():
+    """Hybrid mode filters on rrf_score, ignoring any score field."""
+    rows = [
+        {"kb_id": "a", "rrf_score": 0.8, "score": 0.0},  # rrf passes
+        {"kb_id": "b", "rrf_score": 0.2, "score": 0.95},  # rrf fails (score irrelevant)
+    ]
+    out = srv._filter_by_min_score(rows, "hybrid", 0.5)
+    assert [r["kb_id"] for r in out] == ["a"]
+
+
+def test_min_score_fts_filters_on_score():
+    """fts mode filters on the score field."""
+    rows = [
+        {"kb_id": "a", "score": 0.6},
+        {"kb_id": "b", "score": 0.4},
+    ]
+    out = srv._filter_by_min_score(rows, "fts", 0.5)
+    assert [r["kb_id"] for r in out] == ["a"]
+
+
+def test_min_score_semantic_filters_on_score():
+    """semantic mode filters on the score field (same path as fts)."""
+    rows = [
+        {"kb_id": "a", "score": 0.7},
+        {"kb_id": "b", "score": 0.3},
+    ]
+    out = srv._filter_by_min_score(rows, "semantic", 0.5)
+    assert [r["kb_id"] for r in out] == ["a"]
+
+
+def test_min_score_missing_score_defaults_to_zero():
+    """A result with no score is treated as 0.0 and dropped by any positive min."""
+    rows = [{"kb_id": "a"}, {"kb_id": "b", "score": 0.9}]
+    out = srv._filter_by_min_score(rows, "fts", 0.1)
+    assert [r["kb_id"] for r in out] == ["b"]
+
+
+def test_min_score_all_below_threshold_returns_empty():
+    """When every result is below the threshold, the list is empty."""
+    rows = [{"kb_id": "a", "score": 0.2}, {"kb_id": "b", "score": 0.1}]
+    out = srv._filter_by_min_score(rows, "fts", 0.9)
+    assert out == []
+
+
+# --- End-to-end tests through handle_kb_search ----------------------------
+
+
+def _make_search_db(*, fts5=False, vec=False):
+    """Minimal fake db exposing only the capability flags kb_search inspects."""
+
+    class _SearchDb:
+        fts5_available = fts5
+        vec_extension_loaded = vec
+
+    return _SearchDb()
+
+
+def test_kb_search_fts_min_score_filters_and_counts(monkeypatch):
+    """SQLite fts path: results below min_score excluded; count = filtered len."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True))
+    monkeypatch.setattr(
+        srch,
+        "fts5_search_sqlite",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "score": 0.9, "content": "x"},
+            {"kb_id": "b", "title": "B", "score": 0.4, "content": "y"},
+            {"kb_id": "c", "title": "C", "score": 0.6, "content": "z"},
+        ],
+    )
+
+    resp = srv.handle_kb_search("q", search_mode="fts", min_score=0.5)
+    assert resp["ok"] is True
+    kept_ids = [r["kb_id"] for r in resp["data"]["results"]]
+    assert kept_ids == ["a", "c"]  # b (0.4) dropped
+    # count reflects the POST-filter total, not the pre-filter 3.
+    assert resp["data"]["count"] == 2
+    assert resp["data"]["count"] == len(resp["data"]["results"])
+
+
+def test_kb_search_fts_no_min_score_returns_all(monkeypatch):
+    """Backward compat: omitting min_score returns every result."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True))
+    monkeypatch.setattr(
+        srch,
+        "fts5_search_sqlite",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "score": 0.9, "content": "x"},
+            {"kb_id": "b", "title": "B", "score": 0.1, "content": "y"},
+        ],
+    )
+
+    resp = srv.handle_kb_search("q", search_mode="fts")
+    assert resp["ok"] is True
+    assert resp["data"]["count"] == 2
+    assert [r["kb_id"] for r in resp["data"]["results"]] == ["a", "b"]
+
+
+def test_kb_search_fts_min_score_all_below_returns_empty(monkeypatch):
+    """Edge: min_score above every result -> empty list, count=0."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True))
+    monkeypatch.setattr(
+        srch,
+        "fts5_search_sqlite",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "score": 0.3, "content": "x"},
+            {"kb_id": "b", "title": "B", "score": 0.2, "content": "y"},
+        ],
+    )
+
+    resp = srv.handle_kb_search("q", search_mode="fts", min_score=0.9)
+    assert resp["ok"] is True
+    assert resp["data"]["results"] == []
+    assert resp["data"]["count"] == 0
+
+
+def test_kb_search_hybrid_min_score_filters_on_rrf_score(monkeypatch):
+    """SQLite hybrid path: filtering uses rrf_score, count = filtered len."""
+    monkeypatch.setenv("DB_BACKEND", "sqlite")
+    monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
+    # Hybrid path needs vec extension + fts5 (else it downgrades to semantic).
+    monkeypatch.setattr(srv, "db", _make_search_db(fts5=True, vec=True))
+    monkeypatch.setattr(srch, "semantic_enabled", lambda: True)
+    monkeypatch.setattr(srch, "rrf_k", lambda: 60)
+    # Avoid loading any embedding model.
+    import lore.embeddings as _emb
+
+    monkeypatch.setattr(_emb, "get_model_name", lambda: "fake-model")
+    monkeypatch.setattr(_emb, "encode_text", lambda _q: [0.0] * 4)
+    monkeypatch.setattr(
+        srch,
+        "hybrid_search_sqlite",
+        lambda *_a, **_k: [
+            {"kb_id": "a", "title": "A", "rrf_score": 0.05},
+            {"kb_id": "b", "title": "B", "rrf_score": 0.01},
+            {"kb_id": "c", "title": "C", "rrf_score": 0.03},
+        ],
+    )
+
+    resp = srv.handle_kb_search("q", search_mode="hybrid", min_score=0.025)
+    assert resp["ok"] is True
+    assert resp["data"]["search_mode"] == "hybrid"
+    kept_ids = [r["kb_id"] for r in resp["data"]["results"]]
+    assert kept_ids == ["a", "c"]  # b (0.01) dropped
+    assert resp["data"]["count"] == 2
+    assert resp["data"]["count"] == len(resp["data"]["results"])
+
+
+def test_kb_search_min_score_in_schema():
+    """The kb_search inputSchema must expose an optional numeric min_score."""
+    schema = srv._TOOL_SCHEMA_MAP["kb_search"]
+    assert "min_score" in schema["properties"]
+    assert schema["properties"]["min_score"]["type"] == "number"
+    # min_score is optional (not required) for backward compatibility.
+    assert "min_score" not in schema.get("required", [])
