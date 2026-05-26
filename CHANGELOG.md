@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## [0.8.0] - 2026-05-26
+
+### Added
+- `min_score` parameter on `kb_search` — filter results below a relevance threshold (FTS bm25 scores are negative; positive values return nothing on FTS path, by design)
+- `journal_search` tool — full-text and ILIKE search across journal entries with optional date range filtering
+- `trust_score` field on KB entries — float 0.0–1.0 provenance/quality signal; filterable via `min_trust_score` on `kb_search` and `kb_list`
+- Migration `009_trust_score.sql` for PostgreSQL; SQLite auto-migrated via PRAGMA-guarded ALTER TABLE
+
+### Fixed
+- SQL operator-precedence bug in `fts_search_postgres` — `AND topic = %s` was bypassed by the English FTS branch due to unparenthesized OR expression; topic filtering now works correctly for all FTS queries
+
+### Tests
+- 277 unit tests (up from 205 at v0.7.0)
+- 81 e2e tests against staging (up from 64); all passing
+- Regression corpus tests now topic-scoped for reliable isolation against large corpora
+
 ## [0.6.0] - 2026-05-24
 
 > **Note:** This release was yanked from PyPI on 2026-05-24. Existing installs continue to work; new installs will skip this version. A successor release will follow once the staging and end-to-end testing pipeline is established. The feature set remains intact and accurate.
