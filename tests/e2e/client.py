@@ -270,6 +270,28 @@ class LoreClient:
         """
         return self.tool("kb_list", {**kw})
 
+    # ------------------------------------------------------------------
+    # Journal convenience wrappers
+    # ------------------------------------------------------------------
+
+    def journal_search(self, query: str, **kw: Any) -> dict[str, Any]:
+        """Search journal entries by content.
+
+        Args:
+            query: Free-text search query.
+            **kw: Optional overrides: ``limit``, ``entry_type``,
+                  ``date_from`` (``YYYY-MM-DD``), ``date_to`` (``YYYY-MM-DD``).
+
+        Returns:
+            Unwrapped result dict with ``entries`` list, ``count``,
+            ``search_mode``, and ``backend`` fields.
+        """
+        return self.tool("journal_search", {"query": query, **kw})
+
+    # ------------------------------------------------------------------
+    # Embedding helpers
+    # ------------------------------------------------------------------
+
     def kb_embedding_status(self) -> dict[str, Any]:
         """Return the current embedding-coverage status report.
 
