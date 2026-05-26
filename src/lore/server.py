@@ -249,6 +249,18 @@ _TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "Origin: 'human', 'agent', or 'system'. Optional, defaults to null.",
                 },
+                "trust_score": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "default": 1.0,
+                    "description": (
+                        "Confidence weight for this fact (0.0–1.0). Defaults to "
+                        "1.0 (fully trusted). Lower values mark low-confidence "
+                        "facts that callers can later exclude via kb_search's "
+                        "min_trust_score filter."
+                    ),
+                },
             },
             "required": ["topic", "title", "content"],
         },
@@ -332,6 +344,16 @@ _TOOL_DEFINITIONS = [
                         "hybrid/semantic modes for intuitive 0.0-1.0 scoring."
                     ),
                 },
+                "min_trust_score": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": (
+                        "Minimum trust score threshold (0.0–1.0). Excludes "
+                        "entries with trust_score below this value. Useful for "
+                        "filtering out deprecated or low-confidence facts."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -369,7 +391,10 @@ _TOOL_DEFINITIONS = [
     ),
     types.Tool(
         name="kb_update",
-        description="Update existing KB entry content, title, topic, tags, and verified state",
+        description=(
+            "Update existing KB entry content, title, topic, tags, verified "
+            "state, and trust_score"
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -385,6 +410,15 @@ _TOOL_DEFINITIONS = [
                 "verified": {
                     "type": ["boolean", "null"],
                     "description": "Mark entry as human-verified (true), disputed (false), or reset to unreviewed (null).",
+                },
+                "trust_score": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": (
+                        "Update the entry's confidence weight (0.0–1.0). Omit to "
+                        "leave the existing trust_score unchanged."
+                    ),
                 },
             },
             "required": ["kb_id"],
@@ -1489,12 +1523,20 @@ def handle_kb_add(
     tags: list = None,
     author: str = None,
     source_type: str = None,
+    trust_score: float = 1.0,
 ) -> dict:
     """Add KB entry.
 
     Optional attribution fields (author, source_type) support multi-agent
     provenance tracking. See `verified` flag (set via kb_update) for human review state.
+
+    ``trust_score`` (Issue #14) is a confidence signal in [0.0, 1.0] (default
+    1.0). Out-of-range values are rejected with an invalid_input envelope.
     """
+    # Issue #14: validate the confidence bound before touching the database.
+    err = _validate_trust_score(trust_score)
+    if err is not None:
+        return err
     try:
         kb_id = f"kb_{uuid.uuid4().hex[:12]}"
 
@@ -1510,6 +1552,8 @@ def handle_kb_add(
             "tags": tags or [],
             "author": author,
             "source_type": source_type,
+            # Issue #14: per-entry confidence weight (already validated above).
+            "trust_score": float(trust_score),
         }
 
         db.table("knowledge.kb_entries").insert(entry).execute()
@@ -1527,6 +1571,7 @@ def handle_kb_add(
                 "topic": topic,
                 "author": author,
                 "source_type": source_type,
+                "trust_score": float(trust_score),
                 "embedded": embedded,
             },
         )
@@ -1650,6 +1695,46 @@ def _filter_by_min_score(
     return filtered
 
 
+def _validate_trust_score(trust_score: float | None) -> dict | None:
+    """Validate a ``trust_score`` is a number in [0.0, 1.0] (Issue #14).
+
+    Returns ``None`` when valid (including when ``trust_score`` is ``None``,
+    which means "not provided" for the update path). Otherwise returns an
+    ``invalid_input`` ResponseEnvelope the caller should return verbatim.
+    """
+    if trust_score is None:
+        return None
+    try:
+        value = float(trust_score)
+    except (TypeError, ValueError):
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "trust_score must be a number between 0.0 and 1.0",
+        )
+    if not (0.0 <= value <= 1.0):
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            "trust_score must be between 0.0 and 1.0",
+        )
+    return None
+
+
+def _filter_by_min_trust_score(
+    results: list[dict], min_trust_score: float | None
+) -> list[dict]:
+    """Drop results whose ``trust_score`` is below ``min_trust_score`` (Issue #14).
+
+    Pure query-layer filter applied after results are fetched. A missing
+    ``trust_score`` defaults to 1.0 so that legacy rows (created before the
+    column existed) are never excluded — they are treated as fully trusted.
+    When ``min_trust_score`` is None this is a no-op (returns the list
+    unchanged), preserving backward compatibility.
+    """
+    if min_trust_score is None:
+        return results
+    return [r for r in results if r.get("trust_score", 1.0) >= min_trust_score]
+
+
 def handle_kb_search(
     query: str,
     topic: str = None,
@@ -1662,6 +1747,7 @@ def handle_kb_search(
     required_requery: bool = False,
     caller_agent: str = None,
     min_score: float = None,
+    min_trust_score: float = None,
 ) -> dict:
     """Search KB entries.
 
@@ -1678,6 +1764,11 @@ def handle_kb_search(
     excluded server-side and ``count`` reflects the post-filter total. Hybrid
     mode filters on ``rrf_score``; fts/semantic filter on ``score``. None (the
     default) disables filtering for full backward compatibility.
+
+    ``min_trust_score`` (Issue #14): when set, results whose ``trust_score`` is
+    below the threshold are excluded. Applied before ``min_score`` so the two
+    filters compose. A row with no ``trust_score`` defaults to 1.0 (fully
+    trusted) for backward compatibility. None (the default) disables the filter.
     """
     try:
         from lore import search as _search  # local import: tolerant of degraded envs
@@ -1763,6 +1854,8 @@ def handle_kb_search(
                 search_mode=effective_mode,
                 encode_query=_encode_query,
             )
+            # Issue #14: drop low-confidence rows first so the two filters compose.
+            results = _filter_by_min_trust_score(results, min_trust_score)
             # Issue #16: drop results below the relevance threshold (post-filter).
             results = _filter_by_min_score(results, effective_mode, min_score)
             resp_data: dict = {
@@ -1799,6 +1892,8 @@ def handle_kb_search(
                 search_mode=requested_mode,
                 encode_query=_encode_query_pg,
             )
+            # Issue #14: drop low-confidence rows first so the two filters compose.
+            results = _filter_by_min_trust_score(results, min_trust_score)
             # Issue #16: drop results below the relevance threshold (post-filter).
             results = _filter_by_min_score(results, requested_mode, min_score)
             resp_data = {
@@ -1822,6 +1917,8 @@ def handle_kb_search(
             results = _search.fts5_search_sqlite(db, query, topic, top_k_int)
             # Strip content from response (consistent with hybrid path).
             results = [{k: v for k, v in r.items() if k != "content"} for r in results]
+            # Issue #14: drop low-confidence rows first so the two filters compose.
+            results = _filter_by_min_trust_score(results, min_trust_score)
             # Issue #16: drop results below the relevance threshold (post-filter).
             results = _filter_by_min_score(results, "fts", min_score)
             resp_data = {
@@ -1839,6 +1936,8 @@ def handle_kb_search(
         if is_postgres and requested_mode == "fts":
             pg_rows = _search.fts_search_postgres(db, query, topic, top_k_int)
             pg_rows = [{k: v for k, v in r.items() if k != "content"} for r in pg_rows]
+            # Issue #14: drop low-confidence rows first so the two filters compose.
+            pg_rows = _filter_by_min_trust_score(pg_rows, min_trust_score)
             # Issue #16: drop results below the relevance threshold (post-filter).
             pg_rows = _filter_by_min_score(pg_rows, "fts", min_score)
             resp_data = {
@@ -1859,7 +1958,7 @@ def handle_kb_search(
         tsquery_safe = _sanitize_search_query(query).replace(" ", " & ")
 
         query_builder = db.table("knowledge.kb_entries").select(
-            "kb_id, topic, title, tags, author, source_type, verified"
+            "kb_id, topic, title, tags, author, source_type, verified, trust_score"
         )
 
         if topic:
@@ -1875,11 +1974,13 @@ def handle_kb_search(
 
         result = query_builder.limit(max(top_k_int, 50)).execute()
 
+        # Issue #14: drop low-confidence rows first so the two filters compose.
+        lexical_rows = _filter_by_min_trust_score(list(result.data), min_trust_score)
         # Issue #16: drop results below the relevance threshold (post-filter).
         # The legacy lexical path carries no per-row score, so any positive
         # min_score excludes everything (score defaults to 0.0); min_score=0.0
         # and min_score=None both pass all rows through.
-        lexical_results = _filter_by_min_score(list(result.data), "fts", min_score)
+        lexical_results = _filter_by_min_score(lexical_rows, "fts", min_score)
 
         envelope_data = {
             "results": lexical_results,
@@ -2209,6 +2310,7 @@ def handle_kb_update(
     tags: list = None,
     topic: str = None,
     verified: Any = _VERIFIED_SENTINEL,
+    trust_score: float = None,
     entry_id: str = None,
     **kwargs,
 ) -> dict:
@@ -2222,8 +2324,17 @@ def handle_kb_update(
 
     `verified` accepts True (human-verified), False (disputed), or None (reset to
     unreviewed). Omit the argument entirely to leave the verified state unchanged.
+
+    ``trust_score`` (Issue #14) accepts a number in [0.0, 1.0]. Omit it (leave
+    None) to leave the existing confidence unchanged; out-of-range values are
+    rejected with an invalid_input envelope.
     """
     import psycopg2
+
+    # Issue #14: validate the confidence bound when provided (None = unchanged).
+    err = _validate_trust_score(trust_score)
+    if err is not None:
+        return err
 
     # BUG-1: catch unsupported fields (e.g. the removed `metadata`) at the
     # handler level and return a clean invalid_input envelope. Using **kwargs
@@ -2233,7 +2344,8 @@ def handle_kb_update(
         unsupported = ", ".join(sorted(kwargs))
         return ResponseEnvelope.error(
             ErrorCodes.INVALID_INPUT,
-            f"Unsupported field(s): {unsupported}. Use title, content, topic, tags, or verified.",
+            f"Unsupported field(s): {unsupported}. Use title, content, topic, tags, "
+            "verified, or trust_score.",
         )
 
     # BUG-3: accept kb_id as the primary param name; fall back to entry_id.
@@ -2279,6 +2391,11 @@ def handle_kb_update(
             # Allow True, False, or explicit None (reset to unreviewed)
             update_data["verified"] = verified
 
+        # Issue #14: only write trust_score when explicitly provided so an
+        # omitted value never resets an entry's existing confidence.
+        if trust_score is not None:
+            update_data["trust_score"] = float(trust_score)
+
         # Always update the updated_at timestamp
         update_data["updated_at"] = datetime.utcnow().isoformat()
 
@@ -2286,7 +2403,8 @@ def handle_kb_update(
         if set(update_data.keys()) == {"updated_at"}:
             return ResponseEnvelope.error(
                 ErrorCodes.INVALID_INPUT,
-                "No fields provided for update. Specify content, title, tags, topic, and/or verified.",
+                "No fields provided for update. Specify content, title, tags, topic, "
+                "verified, and/or trust_score.",
             )
 
         # Perform the update. BUG-1: an unknown/unsupported column reaching the
