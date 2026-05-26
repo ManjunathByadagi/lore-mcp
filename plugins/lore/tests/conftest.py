@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
 _TESTS_DIR = Path(__file__).resolve().parent
-_PLUGIN_DIR = _TESTS_DIR.parent          # plugins/lore/
-_PLUGINS_PARENT = _PLUGIN_DIR.parent     # plugins/  (so `import lore` works)
+_PLUGIN_DIR = _TESTS_DIR.parent  # plugins/lore/
+_PLUGINS_PARENT = _PLUGIN_DIR.parent  # plugins/  (so `import lore` works)
 _STUBS_DIR = _TESTS_DIR / "_hermes_stubs"
 
 # Stubs FIRST so they win if hermes-agent happens to be importable locally,
@@ -33,6 +33,7 @@ for p in (str(_STUBS_DIR), str(_PLUGINS_PARENT)):
 # Mock LoreClient
 # ---------------------------------------------------------------------------
 
+
 class MockLoreClient:
     """In-memory fake of LoreClient for tests.
 
@@ -42,12 +43,12 @@ class MockLoreClient:
 
     def __init__(self, *, available: bool = True):
         self._available = available
-        self.added: List[Dict[str, Any]] = []
-        self.updated: List[Dict[str, Any]] = []
-        self.search_calls: List[Dict[str, Any]] = []
+        self.added: list[dict[str, Any]] = []
+        self.updated: list[dict[str, Any]] = []
+        self.search_calls: list[dict[str, Any]] = []
         # search_queue: list of result-lists returned in order, one per
         # kb_search call. If exhausted, returns [].
-        self.search_queue: List[List[Dict[str, Any]]] = []
+        self.search_queue: list[list[dict[str, Any]]] = []
         self._kb_counter = 0
 
     def is_available(self) -> bool:
@@ -65,15 +66,19 @@ class MockLoreClient:
         self._kb_counter += 1
         kb_id = f"kb_mock{self._kb_counter:04d}"
         self.added.append(
-            {"kb_id": kb_id, "topic": topic, "title": title,
-             "content": content, "tags": tags, "author": author}
+            {
+                "kb_id": kb_id,
+                "topic": topic,
+                "title": title,
+                "content": content,
+                "tags": tags,
+                "author": author,
+            }
         )
         return {"kb_id": kb_id}
 
     def kb_update(self, kb_id, *, content=None, title=None, tags=None):
-        self.updated.append(
-            {"kb_id": kb_id, "content": content, "title": title, "tags": tags}
-        )
+        self.updated.append({"kb_id": kb_id, "content": content, "title": title, "tags": tags})
         return {"kb_id": kb_id}
 
     def kb_get(self, kb_id):
@@ -94,14 +99,16 @@ def unavailable_client():
 # Sample data fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def sample_turns():
     """A few raw turns as sync_turn would receive them."""
     return [
-        ("What's my deployment process?",
-         "You deploy via the hermes-scheduler cron job on CT 133."),
-        ("Remember that I prefer dark mode.",
-         "Noted — you prefer dark mode."),
+        (
+            "What's my deployment process?",
+            "You deploy via the hermes-scheduler cron job on CT 133.",
+        ),
+        ("Remember that I prefer dark mode.", "Noted — you prefer dark mode."),
     ]
 
 
@@ -109,12 +116,26 @@ def sample_turns():
 def hybrid_results():
     """Realistic kb_search hybrid-mode result list (rrf_score present)."""
     return [
-        {"kb_id": "kb_aaa111", "title": "Deploy process",
-         "topic": "hermes-conversations", "tags": [], "author": "hermes",
-         "source_type": None, "verified": False,
-         "score": 8.4, "rrf_score": 0.18},
-        {"kb_id": "kb_bbb222", "title": "Dark mode preference",
-         "topic": "hermes-conversations", "tags": [], "author": "hermes",
-         "source_type": None, "verified": False,
-         "score": 6.1, "rrf_score": 0.10},
+        {
+            "kb_id": "kb_aaa111",
+            "title": "Deploy process",
+            "topic": "hermes-conversations",
+            "tags": [],
+            "author": "hermes",
+            "source_type": None,
+            "verified": False,
+            "score": 8.4,
+            "rrf_score": 0.18,
+        },
+        {
+            "kb_id": "kb_bbb222",
+            "title": "Dark mode preference",
+            "topic": "hermes-conversations",
+            "tags": [],
+            "author": "hermes",
+            "source_type": None,
+            "verified": False,
+            "score": 6.1,
+            "rrf_score": 0.10,
+        },
     ]

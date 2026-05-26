@@ -9,8 +9,8 @@ recalled context is never re-stored as a new fact.
 from __future__ import annotations
 
 from lore import (
-    MEMORY_FENCE_START,
     MEMORY_FENCE_END,
+    MEMORY_FENCE_START,
     LoreMemoryProvider,
 )
 

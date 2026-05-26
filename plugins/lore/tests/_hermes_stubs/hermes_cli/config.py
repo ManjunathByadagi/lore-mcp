@@ -7,10 +7,10 @@ Safely traverses nested dict keys, returning ``default`` on any miss.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
-def cfg_get(cfg: Optional[Dict[str, Any]], *keys: str, default: Any = None) -> Any:
+def cfg_get(cfg: dict[str, Any] | None, *keys: str, default: Any = None) -> Any:
     cur: Any = cfg
     for key in keys:
         if not isinstance(cur, dict):

@@ -27,6 +27,7 @@ def _provider(mock_client=None):
 # Basic provider identity
 # ---------------------------------------------------------------------------
 
+
 def test_provider_name_is_lore():
     assert _provider().name == "lore"
 
@@ -38,6 +39,7 @@ def test_is_available_returns_bool():
 # ---------------------------------------------------------------------------
 # Tool schemas
 # ---------------------------------------------------------------------------
+
 
 def test_get_tool_schemas_returns_list():
     schemas = _provider().get_tool_schemas()
@@ -60,15 +62,14 @@ def test_lore_remember_tool_present():
 
 
 def test_lore_remember_requires_content():
-    schema = next(
-        s for s in _provider().get_tool_schemas() if s["name"] == "lore_remember"
-    )
+    schema = next(s for s in _provider().get_tool_schemas() if s["name"] == "lore_remember")
     assert "content" in schema["parameters"]["required"]
 
 
 # ---------------------------------------------------------------------------
 # handle_tool_call dispatch
 # ---------------------------------------------------------------------------
+
 
 def test_handle_lore_remember_stores(mock_client):
     mock_client.search_queue = [[]]  # no dup -> add
@@ -95,6 +96,7 @@ def test_handle_lore_remember_missing_content_errors(mock_client):
 # Config schema + save_config
 # ---------------------------------------------------------------------------
 
+
 def test_config_schema_exposes_expected_keys():
     keys = {f["key"] for f in _provider().get_config_schema()}
     assert {"recall_mode", "write_frequency", "dedup_threshold", "lore_url"} <= keys
@@ -111,9 +113,7 @@ def test_config_schema_defaults():
 
 def test_save_config_writes_json(tmp_path):
     p = _provider()
-    p.save_config(
-        {"recall_mode": "hybrid", "dedup_threshold": "0.07"}, str(tmp_path)
-    )
+    p.save_config({"recall_mode": "hybrid", "dedup_threshold": "0.07"}, str(tmp_path))
     cfg_file = tmp_path / "plugins" / "lore" / "config.json"
     assert cfg_file.exists()
     saved = json.loads(cfg_file.read_text(encoding="utf-8"))
@@ -124,6 +124,7 @@ def test_save_config_writes_json(tmp_path):
 # ---------------------------------------------------------------------------
 # register()
 # ---------------------------------------------------------------------------
+
 
 class _Ctx:
     def __init__(self):

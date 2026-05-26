@@ -9,8 +9,8 @@ flushes the captured turns to Lore under topic 'hermes-conversations'.
 from __future__ import annotations
 
 from lore import (
-    MEMORY_FENCE_START,
     MEMORY_FENCE_END,
+    MEMORY_FENCE_START,
     LoreMemoryProvider,
     strip_memory_fence,
 )
@@ -26,6 +26,7 @@ def _provider(mock_client, session_id="sess-1"):
 # ---------------------------------------------------------------------------
 # strip_memory_fence
 # ---------------------------------------------------------------------------
+
 
 def test_strip_removes_fenced_block():
     text = (
@@ -46,11 +47,7 @@ def test_strip_handles_no_fence():
 
 
 def test_strip_handles_multiple_fences():
-    text = (
-        f"{MEMORY_FENCE_START}a{MEMORY_FENCE_END}"
-        "keep"
-        f"{MEMORY_FENCE_START}b{MEMORY_FENCE_END}"
-    )
+    text = f"{MEMORY_FENCE_START}a{MEMORY_FENCE_END}keep{MEMORY_FENCE_START}b{MEMORY_FENCE_END}"
     out = strip_memory_fence(text)
     assert out.strip() == "keep"
 
@@ -58,6 +55,7 @@ def test_strip_handles_multiple_fences():
 # ---------------------------------------------------------------------------
 # sync_turn capture shape
 # ---------------------------------------------------------------------------
+
 
 def test_sync_turn_captures_structured_turn(mock_client):
     p = _provider(mock_client)
@@ -100,6 +98,7 @@ def test_sync_turn_ignores_empty_turns(mock_client):
 # ---------------------------------------------------------------------------
 # on_session_end persistence
 # ---------------------------------------------------------------------------
+
 
 def test_on_session_end_persists_turns(mock_client):
     mock_client.search_queue = [[]]  # dedup probe -> no dup -> add

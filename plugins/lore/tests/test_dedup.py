@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from lore.lore_client import DEDUP_THRESHOLD, add_or_update
 
-
 # ---------------------------------------------------------------------------
 # Threshold calibration
 # ---------------------------------------------------------------------------
+
 
 def test_dedup_threshold_is_sensible_default():
     # rrf_score for hybrid search is in (0, ~0.3]. Threshold must be a
@@ -40,6 +40,7 @@ def test_threshold_separates_similar_from_dissimilar():
 # ---------------------------------------------------------------------------
 # add_or_update behavior
 # ---------------------------------------------------------------------------
+
 
 def test_near_duplicate_triggers_update(mock_client):
     mock_client.search_queue = [[SIMILAR_TOP_HIT]]
@@ -70,9 +71,7 @@ def test_dissimilar_triggers_add(mock_client):
 
 def test_no_results_triggers_add(mock_client):
     mock_client.search_queue = [[]]  # empty search result
-    result = add_or_update(
-        mock_client, topic="t", title="x", content="first ever entry"
-    )
+    result = add_or_update(mock_client, topic="t", title="x", content="first ever entry")
     assert result["action"] == "added"
     assert len(mock_client.added) == 1
 
@@ -90,9 +89,7 @@ def test_dedup_uses_hybrid_search(mock_client):
 def test_dedup_respects_custom_threshold(mock_client):
     # rrf_score 0.05 is below default but above a very low custom threshold
     mock_client.search_queue = [[{"kb_id": "kb_x", "rrf_score": 0.05}]]
-    result = add_or_update(
-        mock_client, topic="t", title="x", content="c", threshold=0.04
-    )
+    result = add_or_update(mock_client, topic="t", title="x", content="c", threshold=0.04)
     assert result["action"] == "updated"
 
 
@@ -104,9 +101,7 @@ def test_missing_rrf_score_treated_as_dissimilar(mock_client):
 
 
 def test_unavailable_client_skips_dedup_and_returns_skipped(unavailable_client):
-    result = add_or_update(
-        unavailable_client, topic="t", title="x", content="c"
-    )
+    result = add_or_update(unavailable_client, topic="t", title="x", content="c")
     assert result["action"] == "skipped"
     assert len(unavailable_client.added) == 0
     assert len(unavailable_client.updated) == 0

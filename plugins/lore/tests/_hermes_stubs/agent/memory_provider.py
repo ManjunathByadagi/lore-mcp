@@ -11,7 +11,7 @@ conftest.py.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 
 class MemoryProvider(ABC):
@@ -28,7 +28,7 @@ class MemoryProvider(ABC):
     def initialize(self, session_id: str, **kwargs) -> None: ...
 
     @abstractmethod
-    def get_tool_schemas(self) -> List[Dict[str, Any]]: ...
+    def get_tool_schemas(self) -> list[dict[str, Any]]: ...
 
     # Optional hooks (defaults match the real ABC)
     def system_prompt_block(self) -> str:
@@ -43,16 +43,14 @@ class MemoryProvider(ABC):
         self, user_content: str, assistant_content: str, *, session_id: str = ""
     ) -> None: ...
 
-    def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
-        raise NotImplementedError(
-            f"Provider {self.name} does not handle tool {tool_name}"
-        )
+    def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
+        raise NotImplementedError(f"Provider {self.name} does not handle tool {tool_name}")
 
     def shutdown(self) -> None: ...
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None: ...
 
-    def on_session_end(self, messages: List[Dict[str, Any]]) -> None: ...
+    def on_session_end(self, messages: list[dict[str, Any]]) -> None: ...
 
     def on_session_switch(
         self,
@@ -63,22 +61,22 @@ class MemoryProvider(ABC):
         **kwargs,
     ) -> None: ...
 
-    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+    def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:
         return ""
 
     def on_delegation(
         self, task: str, result: str, *, child_session_id: str = "", **kwargs
     ) -> None: ...
 
-    def get_config_schema(self) -> List[Dict[str, Any]]:
+    def get_config_schema(self) -> list[dict[str, Any]]:
         return []
 
-    def save_config(self, values: Dict[str, Any], hermes_home: str) -> None: ...
+    def save_config(self, values: dict[str, Any], hermes_home: str) -> None: ...
 
     def on_memory_write(
         self,
         action: str,
         target: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None: ...
