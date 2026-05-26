@@ -280,51 +280,9 @@ lore-mcp
 
 ## Hermes Memory Provider
 
-`plugins/lore/` contains a [Nous Hermes](https://github.com/NousResearch/Hermes) agent memory provider plugin that backs Hermes conversation memory with Lore's knowledge base. Instead of discarding context at session end, Hermes agents can recall relevant facts from prior sessions and store new knowledge durably in Lore.
+A Hermes agent memory provider plugin that backs conversation memory with Lore is available as a separate package:
 
-### What it does
-
-- **On session start** — runs a hybrid `kb_search` against Lore and injects the top results into the system prompt as a fenced recall block.
-- **During conversation** — syncs each turn to Lore as a structured KB entry under the `hermes-conversations` topic. Recalled memory is stripped before storing, so injected context is never re-persisted as a new "fact".
-- **On session end** — flushes any remaining captured turns to Lore. A separate `hermes-scheduler` job summarizes them; the provider itself never calls an LLM.
-- **Explicit storage** — exposes a `lore_remember` tool that agents (or users) can call to store a durable fact immediately. Deduplicates automatically before writing.
-- **Configurable dedup threshold** — before any write, the plugin probes Lore with a hybrid search. If the top hit's `rrf_score` meets the threshold, it updates the existing entry instead of creating a near-duplicate. The default threshold (`0.10`) cleanly separates near-duplicates from unrelated content in hybrid mode.
-
-### Installation
-
-The plugin is a file drop — no separate pip install:
-
-```bash
-cp -r plugins/lore/ $HERMES_HOME/plugins/lore/
-```
-
-### Configuration
-
-In `$HERMES_HOME/config.yaml`, enable the provider:
-
-```yaml
-memory:
-  memory_enabled: true
-  provider: lore
-```
-
-Fine-grained options can be set in `$HERMES_HOME/plugins/lore/config.json`:
-
-| Key | Default | Description |
-|---|---|---|
-| `lore_url` | `http://192.168.1.21:5555` | Base URL of the Lore MCP server |
-| `recall_mode` | `hybrid` | Search mode for prefetch: `fts`, `semantic`, or `hybrid` |
-| `write_frequency` | `turn` | Persist after each turn (`turn`) or at session end (`session`) |
-| `dedup_threshold` | `0.10` | `rrf_score` at or above which a write is treated as a near-duplicate and updates instead |
-
-### Requirements
-
-- Lore MCP server reachable at the configured `lore_url` (default `http://192.168.1.21:5555`). The server must be running in HTTP mode (`lore-mcp --host 0.0.0.0 --port 5555`).
-- `httpx` available in the Hermes virtual environment (a standard Hermes dependency).
-
-### Plugin location
-
-`plugins/lore/` in this repository.
+**[hermes-lore-plugin](https://github.com/davidgut1982/hermes-lore-plugin)** — drop-in memory provider for the [Hermes agent](https://github.com/NousResearch/Hermes). Stores KB entries in Lore, prefetches relevant context on session start, and deduplicates before storing.
 
 ---
 
