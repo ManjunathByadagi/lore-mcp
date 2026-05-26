@@ -107,11 +107,13 @@ class TestRegressionCorpus:
 
         yield
 
-        # Cleanup — best effort
+        # Cleanup — best effort so teardown failures don't mask test failures.
+        # Without cleanup, seeded entries accumulate across runs and can degrade
+        # rank-based assertions by inflating the result set with stale content.
         try:
             client.kb_delete(seeded_id, confirm=True)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cleanup] failed to delete seeded entry {seeded_id!r}: {exc}")
 
     @pytest.mark.parametrize("entry,query", _collect_params())
     def test_corpus_query(
@@ -126,6 +128,11 @@ class TestRegressionCorpus:
         expect_match: bool = query.get("expect_match", True)
         max_rank: int | None = query.get("max_rank")
 
+        # NOTE: searches are intentionally global (no topic filter) to mirror
+        # real-world recall conditions.  Competing entries from other tests or
+        # prior runs can affect rank; teardown in _seed_and_cleanup prevents
+        # accumulation across runs.  If rank instability appears, consider
+        # passing topic=self._topic to kb_search once the server supports it.
         result = client.kb_search(q_text, search_mode=mode, top_k=max(20, _TOP_N_FALSE_NEG))
         results = _get_results(result)
         rank = _find_rank(results, self._seeded_id)
