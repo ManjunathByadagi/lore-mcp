@@ -37,7 +37,10 @@ import warnings
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
+import mcp.types as mt
 from fastmcp import FastMCP
+from fastmcp.server.middleware.middleware import Middleware as MCPMiddleware
+from fastmcp.tools import ToolResult
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -145,6 +148,59 @@ async def lore_lifespan(server: FastMCP):  # noqa: ANN201 - FastMCP lifespan sig
 
 
 mcp: FastMCP = FastMCP("knowledge-mcp", version="0.6.0", lifespan=lore_lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Middleware: guard unknown kwargs for tools that have a fixed parameter set.
+#
+# FastMCP 3.x rejects ``**kwargs`` in ``@mcp.tool()`` functions at
+# registration time. Unknown arguments therefore reach pydantic validation
+# inside ``tool._run()`` and raise ``PydanticValidationError``, which the
+# framework re-raises as a raw -32603 JSON-RPC error. That trips Hermes's
+# circuit breaker and marks the whole MCP server unreachable for 48 s.
+#
+# The middleware intercepts ``tools/call`` *before* pydantic runs, checks
+# for unknown params on the guarded tools, and returns a clean
+# ``invalid_input`` business-envelope so callers can handle it gracefully.
+# ---------------------------------------------------------------------------
+
+_STRICT_TOOL_PARAMS: dict[str, frozenset[str]] = {
+    "kb_list": frozenset({"topic", "limit", "offset"}),
+}
+
+
+class _StrictArgsMiddleware(MCPMiddleware):
+    """Return a clean invalid_input envelope for unknown tool arguments.
+
+    Prevents FastMCP's pydantic validation from firing on hallucinated filter
+    params (e.g. ``created_at__gte``) and producing a raw -32603 error that
+    trips Hermes's circuit breaker.
+    """
+
+    async def on_call_tool(self, context, call_next):  # type: ignore[override]
+        params = context.message
+        allowed = _STRICT_TOOL_PARAMS.get(params.name)
+        if allowed is not None and params.arguments:
+            unknown = set(params.arguments) - allowed
+            if unknown:
+                unsupported = ", ".join(sorted(unknown))
+                payload = json.dumps(
+                    {
+                        "ok": False,
+                        "error": "invalid_input",
+                        "message": (
+                            f"{params.name} does not accept: {unsupported}. "
+                            f"Supported params: {', '.join(sorted(allowed))}."
+                        ),
+                    }
+                )
+                return ToolResult(
+                    content=[mt.TextContent(type="text", text=payload)]
+                )
+        return await call_next(context)
+
+
+mcp.add_middleware(_StrictArgsMiddleware())
 
 
 # ===========================================================================
