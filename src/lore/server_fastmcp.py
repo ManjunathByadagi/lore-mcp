@@ -39,7 +39,13 @@ from typing import Any, Literal, Optional
 
 import mcp.types as mt
 from fastmcp import FastMCP
-from fastmcp.server.middleware.middleware import Middleware as MCPMiddleware
+from fastmcp.server.middleware.middleware import (
+    CallNext,
+    MiddlewareContext,
+)
+from fastmcp.server.middleware.middleware import (
+    Middleware as MCPMiddleware,
+)
 from fastmcp.tools import ToolResult
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -53,6 +59,7 @@ from starlette.responses import JSONResponse
 # ---------------------------------------------------------------------------
 from lore import server as _srv
 from lore.db_client import get_db_client
+from lore.response import ErrorCodes, ResponseEnvelope
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -164,8 +171,17 @@ mcp: FastMCP = FastMCP("knowledge-mcp", version="0.6.0", lifespan=lore_lifespan)
 # ``invalid_input`` business-envelope so callers can handle it gracefully.
 # ---------------------------------------------------------------------------
 
+# Fixed-signature tools whose @mcp.tool() wrappers accept no **kwargs. Each
+# entry maps a tool name to the exact set of params its wrapper accepts, so the
+# middleware can reject hallucinated filter args before pydantic fires a raw
+# -32603. Param sets mirror the function signatures below verbatim.
 _STRICT_TOOL_PARAMS: dict[str, frozenset[str]] = {
     "kb_list": frozenset({"topic", "limit", "offset"}),
+    "investigation_list": frozenset({"topic"}),
+    "journal_list": frozenset({"limit"}),
+    "investigation_list_experiments": frozenset(),
+    "kb_embedding_status": frozenset(),
+    "multi_search": frozenset({"query"}),
 }
 
 
@@ -177,25 +193,33 @@ class _StrictArgsMiddleware(MCPMiddleware):
     trips Hermes's circuit breaker.
     """
 
-    async def on_call_tool(self, context, call_next):  # type: ignore[override]
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[mt.CallToolRequestParams],
+        call_next: CallNext[mt.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
         params = context.message
         allowed = _STRICT_TOOL_PARAMS.get(params.name)
-        if allowed is not None and params.arguments:
+        if allowed is not None and params.arguments is not None:
             unknown = set(params.arguments) - allowed
             if unknown:
                 unsupported = ", ".join(sorted(unknown))
-                payload = json.dumps(
-                    {
-                        "ok": False,
-                        "error": "invalid_input",
-                        "message": (
-                            f"{params.name} does not accept: {unsupported}. "
-                            f"Supported params: {', '.join(sorted(allowed))}."
-                        ),
-                    }
+                msg = (
+                    f"{params.name} does not accept: {unsupported}. "
+                    f"Supported params: {', '.join(sorted(allowed))}."
                 )
+                # Use ResponseEnvelope.error so the payload includes the "env"
+                # field that every other tool response carries.
+                payload = json.dumps(
+                    ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, msg)
+                )
+                # All guarded tools return a JSON string, which FastMCP wraps as
+                # ``{"result": <string>}`` per their outputSchema. Supply the same
+                # structured_content here so this short-circuit satisfies the
+                # declared schema and is NOT flagged isError by the framework.
                 return ToolResult(
-                    content=[mt.TextContent(type="text", text=payload)]
+                    content=[mt.TextContent(type="text", text=payload)],
+                    structured_content={"result": payload},
                 )
         return await call_next(context)
 
