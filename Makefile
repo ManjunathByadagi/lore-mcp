@@ -1,7 +1,8 @@
 .PHONY: lint format check fix test e2e-staging e2e-local soak-staging
 
 lint:
-	venv/bin/ruff check src/
+	venv/bin/ruff check src/ tests/
+	venv/bin/ruff format src/ tests/ --check
 
 format:
 	venv/bin/ruff format src/ tests/
