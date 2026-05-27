@@ -37,7 +37,16 @@ import warnings
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
+import mcp.types as mt
 from fastmcp import FastMCP
+from fastmcp.server.middleware.middleware import (
+    CallNext,
+    MiddlewareContext,
+)
+from fastmcp.server.middleware.middleware import (
+    Middleware as MCPMiddleware,
+)
+from fastmcp.tools import ToolResult
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -50,6 +59,7 @@ from starlette.responses import JSONResponse
 # ---------------------------------------------------------------------------
 from lore import server as _srv
 from lore.db_client import get_db_client
+from lore.response import ErrorCodes, ResponseEnvelope
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -145,6 +155,76 @@ async def lore_lifespan(server: FastMCP):  # noqa: ANN201 - FastMCP lifespan sig
 
 
 mcp: FastMCP = FastMCP("knowledge-mcp", version="0.6.0", lifespan=lore_lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Middleware: guard unknown kwargs for tools that have a fixed parameter set.
+#
+# FastMCP 3.x rejects ``**kwargs`` in ``@mcp.tool()`` functions at
+# registration time. Unknown arguments therefore reach pydantic validation
+# inside ``tool._run()`` and raise ``PydanticValidationError``, which the
+# framework re-raises as a raw -32603 JSON-RPC error. That trips Hermes's
+# circuit breaker and marks the whole MCP server unreachable for 48 s.
+#
+# The middleware intercepts ``tools/call`` *before* pydantic runs, checks
+# for unknown params on the guarded tools, and returns a clean
+# ``invalid_input`` business-envelope so callers can handle it gracefully.
+# ---------------------------------------------------------------------------
+
+# Fixed-signature tools whose @mcp.tool() wrappers accept no **kwargs. Each
+# entry maps a tool name to the exact set of params its wrapper accepts, so the
+# middleware can reject hallucinated filter args before pydantic fires a raw
+# -32603. Param sets mirror the function signatures below verbatim.
+_STRICT_TOOL_PARAMS: dict[str, frozenset[str]] = {
+    "kb_list": frozenset({"topic", "limit", "offset"}),
+    "investigation_list": frozenset({"topic"}),
+    "journal_list": frozenset({"limit"}),
+    "investigation_list_experiments": frozenset(),
+    "kb_embedding_status": frozenset(),
+    "multi_search": frozenset({"query"}),
+}
+
+
+class _StrictArgsMiddleware(MCPMiddleware):
+    """Return a clean invalid_input envelope for unknown tool arguments.
+
+    Prevents FastMCP's pydantic validation from firing on hallucinated filter
+    params (e.g. ``created_at__gte``) and producing a raw -32603 error that
+    trips Hermes's circuit breaker.
+    """
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[mt.CallToolRequestParams],
+        call_next: CallNext[mt.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        params = context.message
+        allowed = _STRICT_TOOL_PARAMS.get(params.name)
+        if allowed is not None and params.arguments is not None:
+            unknown = set(params.arguments) - allowed
+            if unknown:
+                unsupported = ", ".join(sorted(unknown))
+                msg = (
+                    f"{params.name} does not accept: {unsupported}. "
+                    f"Supported params: {', '.join(sorted(allowed))}."
+                )
+                # Use ResponseEnvelope.error so the payload includes the "env"
+                # field that every other tool response carries.
+                payload = json.dumps(
+                    ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, msg)
+                )
+                # All guarded tools return a JSON string, which FastMCP wraps as
+                # ``{"result": <string>}`` per their outputSchema. Supply the same
+                # structured_content here so this short-circuit satisfies the
+                # declared schema and is NOT flagged isError by the framework.
+                return ToolResult(
+                    content=[mt.TextContent(type="text", text=payload)],
+                    structured_content={"result": payload},
+                )
+        return await call_next(context)
+
+
+mcp.add_middleware(_StrictArgsMiddleware())
 
 
 # ===========================================================================

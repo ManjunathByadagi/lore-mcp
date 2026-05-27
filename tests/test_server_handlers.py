@@ -1183,3 +1183,81 @@ def test_kb_add_none_trust_score_normalises_to_one(monkeypatch):
     assert resp["ok"] is True
     assert resp["data"]["trust_score"] == 1.0
     assert fake.inserted[0]["trust_score"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# _StrictArgsMiddleware: unknown kwargs on fixed-signature tools return a clean
+# invalid_input business envelope instead of a raw -32603 JSON-RPC error that
+# would trip Hermes's circuit breaker (Code Critic findings, issue #17/#18).
+#
+# Driven via asyncio.run() over the FastMCP in-memory Client to match the
+# project convention (no pytest-asyncio marker; --strict-markers).
+# ---------------------------------------------------------------------------
+
+
+def test_fastmcp_middleware_rejects_unknown_kwarg(monkeypatch):
+    """kb_list with a hallucinated filter arg returns ok=False/invalid_input.
+
+    The middleware must short-circuit *before* pydantic validation fires, so
+    the client receives a clean business envelope (with the "env" field) rather
+    than a -32603 ToolError that would mark the MCP server unreachable.
+    """
+    import asyncio
+    import json as _json
+
+    from fastmcp import Client
+
+    import lore.server_fastmcp as fmcp
+
+    # Avoid touching a real DB: if the middleware ever falls through to the
+    # handler, this fake makes the failure mode obvious instead of hitting disk.
+    monkeypatch.setattr(
+        fmcp._srv,
+        "handle_kb_list",
+        lambda *a, **k: pytest.fail("handler should not run for unknown kwargs"),
+    )
+
+    async def _call() -> dict:
+        async with Client(fmcp.mcp) as client:
+            # call_tool() raises ToolError on a -32603, so reaching the assert
+            # below already proves no raw JSON-RPC error escaped.
+            result = await client.call_tool(
+                "kb_list", {"created_at__gte": "2024-01-01"}
+            )
+            return _json.loads(result.content[0].text)
+
+    envelope = asyncio.run(_call())
+    assert envelope["ok"] is False
+    assert envelope["error"] == "invalid_input"
+    # Finding 1: the hand-rolled payload previously omitted "env"; it must be
+    # present now that ResponseEnvelope.error() builds the payload.
+    assert "env" in envelope
+    assert "created_at__gte" in envelope["message"]
+
+
+def test_fastmcp_middleware_allows_known_kwargs(monkeypatch):
+    """A kb_list call using only supported params passes through to the handler."""
+    import asyncio
+    import json as _json
+
+    from fastmcp import Client
+
+    import lore.server_fastmcp as fmcp
+
+    captured: dict = {}
+
+    def _fake_handle_kb_list(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "error": None, "message": "ok", "env": "test", "data": {}}
+
+    monkeypatch.setattr(fmcp._srv, "handle_kb_list", _fake_handle_kb_list)
+
+    async def _call() -> dict:
+        async with Client(fmcp.mcp) as client:
+            result = await client.call_tool("kb_list", {"topic": "x", "limit": 5})
+            return _json.loads(result.content[0].text)
+
+    envelope = asyncio.run(_call())
+    assert envelope["ok"] is True
+    assert captured["topic"] == "x"
+    assert captured["limit"] == 5
