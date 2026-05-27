@@ -210,9 +210,7 @@ class _StrictArgsMiddleware(MCPMiddleware):
                 )
                 # Use ResponseEnvelope.error so the payload includes the "env"
                 # field that every other tool response carries.
-                payload = json.dumps(
-                    ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, msg)
-                )
+                payload = json.dumps(ResponseEnvelope.error(ErrorCodes.INVALID_INPUT, msg))
                 # All guarded tools return a JSON string, which FastMCP wraps as
                 # ``{"result": <string>}`` per their outputSchema. Supply the same
                 # structured_content here so this short-circuit satisfies the

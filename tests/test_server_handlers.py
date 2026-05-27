@@ -162,9 +162,7 @@ def test_kb_list_unknown_kwarg_rejected_at_call_tool_boundary():
     import asyncio
     import json
 
-    out = asyncio.run(
-        srv.call_tool("kb_list", {"created_at__gte": "2026-05-26T00:00:00Z"})
-    )
+    out = asyncio.run(srv.call_tool("kb_list", {"created_at__gte": "2026-05-26T00:00:00Z"}))
     payload = json.loads(out[0].text)
     assert payload["ok"] is False
     assert payload["error"] == "invalid_input"
@@ -1221,9 +1219,7 @@ def test_fastmcp_middleware_rejects_unknown_kwarg(monkeypatch):
         async with Client(fmcp.mcp) as client:
             # call_tool() raises ToolError on a -32603, so reaching the assert
             # below already proves no raw JSON-RPC error escaped.
-            result = await client.call_tool(
-                "kb_list", {"created_at__gte": "2024-01-01"}
-            )
+            result = await client.call_tool("kb_list", {"created_at__gte": "2024-01-01"})
             return _json.loads(result.content[0].text)
 
     envelope = asyncio.run(_call())
