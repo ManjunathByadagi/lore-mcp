@@ -134,6 +134,45 @@ def test_kb_update_metadata_rejected_at_call_tool_boundary():
 
 
 # ---------------------------------------------------------------------------
+# kb_list: unknown kwargs (hallucinated filters like created_at__gte) must
+# surface a clean invalid_input envelope, never a raised TypeError. A raised
+# exception leaks as a tool execution error and trips the caller's circuit
+# breaker, marking the whole MCP server unreachable.
+# ---------------------------------------------------------------------------
+
+
+def test_kb_list_unknown_kwarg_does_not_raise():
+    """An unexpected keyword argument must return a clean envelope, not raise.
+
+    The handler's **kwargs guard runs before any DB access, so no db mock is
+    needed: the unsupported field is rejected up front.
+    """
+    resp = srv.handle_kb_list(created_at__gte="2026-05-26T00:00:00Z")
+    assert resp["ok"] is False
+    assert resp["error"] == "invalid_input"
+    assert "created_at__gte" in resp["message"]
+
+
+def test_kb_list_unknown_kwarg_rejected_at_call_tool_boundary():
+    """End-to-end: a kb_list call carrying a hallucinated filter is rejected as
+    a clean invalid_input at the handler level (**kwargs check), never raising
+    an exception that leaks as unexpected_exception and trips the circuit
+    breaker.
+    """
+    import asyncio
+    import json
+
+    out = asyncio.run(
+        srv.call_tool("kb_list", {"created_at__gte": "2026-05-26T00:00:00Z"})
+    )
+    payload = json.loads(out[0].text)
+    assert payload["ok"] is False
+    assert payload["error"] == "invalid_input"
+    # It is a validation error, NOT an unexpected_exception.
+    assert payload["error"] != "unexpected_exception"
+
+
+# ---------------------------------------------------------------------------
 # BUG-3: kb_update / kb_delete accept kb_id (not just entry_id) + title update
 # ---------------------------------------------------------------------------
 

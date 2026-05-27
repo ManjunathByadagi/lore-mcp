@@ -2263,13 +2263,32 @@ def handle_kb_get(kb_id: str) -> dict:
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_kb_list(topic: str = None, limit: int = 100, offset: int = 0) -> dict:
+def handle_kb_list(
+    topic: str = None, limit: int = 100, offset: int = 0, **kwargs
+) -> dict:
     """List KB entries with pagination.
 
     ``limit`` is clamped to [1, 500] (default 100) and ``offset`` to [0, ∞)
     (default 0). ``total_count`` reflects all matching rows (ignoring
     pagination) so callers can detect further pages via ``has_more``.
+
+    Unknown keyword arguments (e.g. a tool-caller hallucinating a filter such
+    as ``created_at__gte``) are caught here and returned as a clean
+    invalid_input envelope. Using **kwargs rather than additionalProperties:
+    False in the schema avoids FastMCP rejecting the request at the transport
+    layer (which produces a raw -32603 error). Returning a graceful envelope —
+    instead of letting ``handle_kb_list(**arguments)`` raise a TypeError that
+    leaks as a tool execution error — prevents the caller's circuit breaker
+    from marking the whole MCP server unreachable (mirrors the kb_update BUG-1
+    fix).
     """
+    if kwargs:
+        unsupported = ", ".join(sorted(kwargs))
+        return ResponseEnvelope.error(
+            ErrorCodes.INVALID_INPUT,
+            f"kb_list does not accept: {unsupported}. "
+            "Supported params: topic, limit, offset.",
+        )
     try:
         limit = max(1, min(500, int(limit)))
         offset = max(0, int(offset))
