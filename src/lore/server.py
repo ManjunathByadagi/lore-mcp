@@ -2263,9 +2263,7 @@ def handle_kb_get(kb_id: str) -> dict:
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_kb_list(
-    topic: str = None, limit: int = 100, offset: int = 0, **kwargs
-) -> dict:
+def handle_kb_list(topic: str = None, limit: int = 100, offset: int = 0, **kwargs) -> dict:
     """List KB entries with pagination.
 
     ``limit`` is clamped to [1, 500] (default 100) and ``offset`` to [0, ∞)
@@ -2286,8 +2284,7 @@ def handle_kb_list(
         unsupported = ", ".join(sorted(kwargs))
         return ResponseEnvelope.error(
             ErrorCodes.INVALID_INPUT,
-            f"kb_list does not accept: {unsupported}. "
-            "Supported params: topic, limit, offset.",
+            f"kb_list does not accept: {unsupported}. Supported params: topic, limit, offset.",
         )
     try:
         limit = max(1, min(500, int(limit)))
