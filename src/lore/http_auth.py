@@ -82,7 +82,9 @@ def _token_matches(header_value: str | None, expected: str) -> bool:
     parts = header_value.split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer":
         return False
-    presented = parts[1].strip()
+    # RFC 6750: exactly one space between scheme and token; do NOT strip so
+    # "Bearer  secret" (double space) is correctly rejected.
+    presented = parts[1]
     if not presented:
         return False
     return hmac.compare_digest(presented, expected)
@@ -138,7 +140,11 @@ def _extract_authorization(scope: Scope) -> str | None:
 
 
 async def _send_unauthorized(send: Send) -> None:
-    """Emit a ``401`` JSON response without touching the wrapped app."""
+    """Emit a ``401`` JSON response without touching the wrapped app.
+
+    Includes ``WWW-Authenticate: Bearer realm="lore"`` per RFC 6750 §3 so
+    clients know the required authentication scheme.
+    """
     await send(
         {
             "type": "http.response.start",
@@ -146,6 +152,7 @@ async def _send_unauthorized(send: Send) -> None:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(_UNAUTHORIZED_BODY)).encode("ascii")),
+                (b"www-authenticate", b'Bearer realm="lore"'),
             ],
         }
     )

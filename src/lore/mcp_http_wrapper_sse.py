@@ -26,7 +26,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from lore import __version__ as _PACKAGE_VERSION
-from lore.http_auth import BearerAuthMiddleware, cors_config
+from lore.http_auth import BearerAuthMiddleware, cors_config, warn_if_insecure_bind
 
 
 class _SseResponse:
@@ -372,6 +372,8 @@ def main():
     app = create_app(mcp_server, args.module)
 
     logger.info(f"Starting HTTP/SSE MCP Server on {args.host}:{args.port}")
+
+    warn_if_insecure_bind(args.host)
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=True)
 

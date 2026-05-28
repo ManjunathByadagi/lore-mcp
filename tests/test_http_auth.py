@@ -300,3 +300,55 @@ def test_sse_wrapper_open_when_key_unset(monkeypatch):
     client = TestClient(app)
     resp = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialized"})
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: strict RFC 6750 bearer parse — double-space must be rejected
+# ---------------------------------------------------------------------------
+
+
+def test_correct_bearer_returns_200(client_with_key):
+    """Normal ``Bearer <key>`` (single space) must still be accepted."""
+    resp = client_with_key.post("/mcp", json={}, headers={"Authorization": f"Bearer {API_KEY}"})
+    assert resp.status_code == 200
+
+
+def test_double_space_bearer_returns_401(client_with_key):
+    """``Bearer  <key>`` (double space) must be rejected per RFC 6750."""
+    resp = client_with_key.post("/mcp", json={}, headers={"Authorization": f"Bearer  {API_KEY}"})
+    assert resp.status_code == 401
+
+
+def test_lowercase_bearer_scheme_accepted(client_with_key):
+    """Case-insensitive scheme matching (``bearer``) is intentional and must remain."""
+    resp = client_with_key.post("/mcp", json={}, headers={"Authorization": f"bearer {API_KEY}"})
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: WWW-Authenticate header on 401 responses (RFC 6750 §3)
+# ---------------------------------------------------------------------------
+
+
+def test_401_includes_www_authenticate_header(client_with_key):
+    """Every 401 must include ``WWW-Authenticate: Bearer realm="lore"`` per RFC 6750 §3."""
+    resp = client_with_key.post("/mcp", json={})
+    assert resp.status_code == 401
+    www_auth = resp.headers.get("www-authenticate", "")
+    assert "Bearer" in www_auth
+    assert 'realm="lore"' in www_auth
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: exempt-path lookalike paths must NOT bypass auth
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/healthILY", "/health/extra", "/healthz/sub", "/healthx"],
+)
+def test_exempt_path_lookalikes_are_protected(client_with_key, path):
+    """Paths that look like exempt paths but are not exact matches must require auth."""
+    resp = client_with_key.get(path)
+    assert resp.status_code == 401
