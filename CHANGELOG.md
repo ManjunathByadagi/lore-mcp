@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented here.
 
+## [0.8.3] - 2026-05-27
+
+Public-readiness cleanup — remove leftover homelab-specific defaults and fix the
+documented PostgreSQL setup so a fresh public install works out of the box.
+
+### Fixed
+- **`DB_BACKEND=postgres` now works.** The `DatabaseBackend` enum gained
+  `postgres`/`postgresql` aliases that route to the local PostgreSQL client (the
+  same path as `DB_BACKEND=local`). Previously `postgres` fell through to the
+  Supabase branch and crashed demanding `SUPABASE_URL`, contradicting the README.
+- `search_transcripts` / `search_corpora` no longer crash with a `NoneType / str`
+  `TypeError` when their data-source roots are unset; they return a clean,
+  empty "not configured" result instead.
+
+### Changed
+- Search roots are now env-var driven with **portable defaults**. `KNOWLEDGE_DATA_DIR`
+  defaults to `./knowledge-data` (matching the SQLite fallback); `LATVIAN_LEARNING_ROOT`,
+  `LATVIAN_XTTS_ROOT`, and `INGEST_ROOT` default to unset instead of hardcoded
+  `/srv/*` homelab paths.
+- Generic PostgreSQL connection defaults: `DB_NAME=lore`, `DB_USER=lore_user`
+  (was `mpm_system` / `latvian_user`).
+- Sentry release string defaults to `lore-knowledge-mcp@<version>` instead of
+  the hardcoded `latvian-lab@1.0.0`.
+- stdio MCP server identity renamed from `knowledge-mcp` to `lore` to match the project.
+- README version badge is now the dynamic PyPI badge; added a configuration
+  reference table documenting `KNOWLEDGE_DATA_DIR` and the optional search roots.
+
+### Removed
+- Deleted committed working backups of `server.py` (`*.backup`, `*.backup-verbose`,
+  `*.bak-*`, `*.json_backup`) and added matching patterns to `.gitignore`.
+
+### Tests
+- New `tests/test_db_backend_postgres.py` — `DB_BACKEND=postgres`/`postgresql`/`local`
+  select `LocalPostgresClient`, never Supabase; generic `lore`/`lore_user` defaults.
+- New `tests/test_search_config.py` — unset search roots return clean empty
+  "not configured" results (no crash, no `/srv` path).
+
 ## [0.8.0] - 2026-05-26
 
 ### Added

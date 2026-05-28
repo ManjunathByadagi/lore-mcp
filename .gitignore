@@ -94,6 +94,14 @@ docs/_build/
 .tmp/
 .temp/
 
+# Editor / backup copies — never commit working backups of source files
+*.backup
+*.backup-*
+*.bak
+*.bak-*
+*.json_backup
+*.orig
+
 # Docker
 docker-compose.override.yml
 .dockerignore
