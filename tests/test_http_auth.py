@@ -5,11 +5,8 @@ is unset the HTTP surfaces behave exactly as before (open), so the live
 Hermes -> Lore connection (which sends no auth header) keeps working.
 
 These tests cover the shared helpers in ``lore.http_auth`` and verify the
-middleware wired into each of the three HTTP transports:
-
-  1. lore.server          (--host/--port HTTP mode, delegates to the SSE wrapper)
-  2. lore.server_fastmcp   (FastMCP HTTP — what production runs)
-  3. lore.mcp_http_wrapper_sse (the SSE wrapper)
+middleware wired into the FastMCP HTTP transport (the consolidated entry
+point after P1-3).
 
 Behaviour matrix:
   * key UNSET  -> request without header succeeds (back-compat preserved)
@@ -272,37 +269,6 @@ def test_fastmcp_app_open_when_key_unset(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Integration: the SSE wrapper app honours the key
-# ---------------------------------------------------------------------------
-
-
-def test_sse_wrapper_enforces_auth_when_key_set(monkeypatch):
-    monkeypatch.setenv("LORE_API_KEY", API_KEY)
-    from lore import mcp_http_wrapper_sse, server
-
-    app = mcp_http_wrapper_sse.create_app(server.app, "lore.server")
-    client = TestClient(app)
-    assert client.get("/health").status_code == 200
-    assert client.post("/mcp", json={}).status_code == 401
-    ok = client.post(
-        "/mcp",
-        json={"jsonrpc": "2.0", "id": 1, "method": "initialized"},
-        headers={"Authorization": f"Bearer {API_KEY}"},
-    )
-    assert ok.status_code == 200
-
-
-def test_sse_wrapper_open_when_key_unset(monkeypatch):
-    monkeypatch.delenv("LORE_API_KEY", raising=False)
-    from lore import mcp_http_wrapper_sse, server
-
-    app = mcp_http_wrapper_sse.create_app(server.app, "lore.server")
-    client = TestClient(app)
-    resp = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialized"})
-    assert resp.status_code == 200
-
-
-# ---------------------------------------------------------------------------
 # Fix 2: strict RFC 6750 bearer parse — double-space must be rejected
 # ---------------------------------------------------------------------------
 
@@ -355,77 +321,15 @@ def test_exempt_path_lookalikes_are_protected(client_with_key, path):
 
 
 # ---------------------------------------------------------------------------
-# Fix (HIGH): mcp_http_wrapper_sse.main() must initialise db before serving
+# Import-time DB connect guard
 # ---------------------------------------------------------------------------
-
-
-def test_wrapper_main_initialises_db(monkeypatch, tmp_path):
-    """mcp_http_wrapper_sse.main() must set lore.server.db before serving.
-
-    Regression guard for the P1-5 bug: after making db=None at import time,
-    the standalone SSE wrapper (used by docker/knowledge-mcp.service) never
-    called server.main(), so db stayed None and every tools/call crashed with
-    AttributeError: 'NoneType' object has no attribute 'table'.
-
-    The fix: main() calls get_db_client() on the imported server module
-    immediately after load_mcp_server() and before uvicorn.run().
-
-    We exercise the init path directly (without actually starting uvicorn) by
-    monkey-patching uvicorn.run to a no-op and argparse to supply '--module
-    lore.server'.  DB_BACKEND=sqlite is set so no external service is needed.
-    """
-    import importlib
-    import sys
-
-    import lore.mcp_http_wrapper_sse as _wrapper
-    import lore.server as _srv
-
-    # Force a fresh module state: set db to None to simulate import-time state.
-    _srv.db = None
-
-    # Use a SQLite DB in a temp dir so we don't touch real data.
-    monkeypatch.setenv("DB_BACKEND", "sqlite")
-    monkeypatch.setenv("KNOWLEDGE_DATA_DIR", str(tmp_path))
-
-    # Prevent uvicorn from actually binding a port.
-    monkeypatch.setattr("uvicorn.run", lambda *a, **kw: None)
-
-    # Simulate `python -m lore.mcp_http_wrapper_sse --module lore.server ...`
-    original_argv = sys.argv
-    sys.argv = [
-        "mcp_http_wrapper_sse",
-        "--module",
-        "lore.server",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "19999",
-    ]
-    try:
-        # Reload to re-run module-level code cleanly.
-        importlib.reload(_wrapper)
-        result = _wrapper.main()
-    finally:
-        sys.argv = original_argv
-
-    # main() returns None on success (uvicorn.run was no-op).
-    assert result is None, f"main() returned error code: {result}"
-
-    # The crucial assertion: db must be live, not None.
-    import lore.server as _srv_after
-
-    assert _srv_after.db is not None, (
-        "lore.server.db is still None after mcp_http_wrapper_sse.main() — "
-        "tools/call would crash with AttributeError"
-    )
 
 
 def test_plain_import_does_not_connect_db(monkeypatch):
     """Importing lore.server must NOT connect to the DB (import-time connect guard).
 
-    Complements test_wrapper_main_initialises_db: proves that the wrapper fix
-    (which calls get_db_client after load_mcp_server) does not reintroduce
-    import-time DB connections.
+    Ensures that merely importing the module never reaches into the database
+    layer — DB connections happen only when an entry point's main() runs.
     """
     import importlib
 

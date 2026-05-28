@@ -183,8 +183,8 @@ HTTP auth is **opt-in** and off by default:
   endpoints (`/health`, `/healthz`, `/`) stay open so liveness probes keep
   working. **stdio mode is never affected** — it has no network surface.
 
-The same rule applies across all HTTP entry points (`lore-mcp --host/--port`,
-the FastMCP server, and the SSE wrapper).
+The same rule applies to the HTTP entry point (`lore-mcp --host/--port`,
+which invokes the FastMCP server).
 
 **CORS:** origins default to `*` with credentials disabled (the spec forbids
 `*` + credentials). Set `LORE_CORS_ORIGINS` to a comma-separated allow-list

@@ -4,6 +4,26 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+- **Entry point consolidation (P1-3)**: `lore-mcp` console script now invokes
+  `lore.server_fastmcp:main` (FastMCP) directly. Stdio + HTTP modes are
+  unchanged; CLI flags are preserved. Production deployments already used
+  FastMCP (`python -m lore.server_fastmcp`), so there is no operational change.
+- `lore.server:main` is now a deprecation shim that delegates to
+  `lore.server_fastmcp:main`. `python -m lore.server` emits a
+  `DeprecationWarning` but still works.
+- `--version` output normalised to `lore-mcp <version>` across both entry
+  points (previously `lore.server_fastmcp` printed `lore-mcp (fastmcp) ...`).
+- `docker/knowledge-mcp.service` `ExecStart` updated to the canonical
+  `lore-mcp --host 0.0.0.0 --port 5555` invocation.
+
+### Removed
+- `lore.mcp_http_wrapper_sse` (the legacy SSE/JSON-RPC HTTP wrapper). FastMCP's
+  `/mcp`, `/jsonrpc`, `/health`, and `/stream` endpoints provide the full HTTP
+  surface. The retired wrapper returned SSE-framed responses
+  (`event: message\ndata: <json>`); FastMCP returns bare JSON (which all known
+  clients — Hermes, mcpo, OWUI — already use).
+
 ## [0.8.4] - 2026-05-27
 
 ### Added

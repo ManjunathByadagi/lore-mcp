@@ -33,7 +33,6 @@ import sentry_sdk
 import yaml
 from mcp import types
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 
 from . import __version__ as _PACKAGE_VERSION
 from . import telemetry
@@ -4329,98 +4328,22 @@ def handle_cluster_results(
 
 
 def main() -> None:
-    """Entry point for the 'lore-mcp' console script.
+    """Deprecated entry point. Use lore.server_fastmcp:main instead.
 
-    By default runs as an MCP stdio server. If --host/--port are passed,
-    starts the HTTP/SSE wrapper instead (useful for systemd or Docker
-    deployments where the MCP client speaks HTTP).
-
-    Backend configuration is read entirely from the environment
-    (DB_BACKEND, KNOWLEDGE_DATA_DIR, DB_HOST, DB_PORT, DB_NAME, DB_USER,
-    DB_PASSWORD, SUPABASE_URL, SUPABASE_KEY). The default backend is
-    'sqlite' so a clean checkout boots without external services.
+    Retained for backwards compatibility for users invoking ``python -m lore.server``.
+    Emits a DeprecationWarning then delegates to ``lore.server_fastmcp:main``.
     """
-    import argparse
-    import asyncio
+    import warnings
 
-    from . import __version__
-
-    parser = argparse.ArgumentParser(
-        prog="lore-mcp",
-        description="Lore MCP server (stdio by default, HTTP/SSE with --host/--port).",
+    warnings.warn(
+        "lore.server:main is deprecated and will be removed in a future release. "
+        "The lore-mcp console script now invokes lore.server_fastmcp:main directly.",
+        DeprecationWarning,
+        stacklevel=2,
     )
-    parser.add_argument(
-        "--host",
-        default=None,
-        help="Bind address for HTTP/SSE mode (e.g. 0.0.0.0). Omit for stdio mode.",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help="TCP port for HTTP/SSE mode (e.g. 5555). Omit for stdio mode.",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"lore-mcp {__version__}",
-    )
-    args = parser.parse_args()
+    from lore.server_fastmcp import main as _main
 
-    # Default to the zero-friction SQLite backend if none is configured.
-    # All other backends require their own env vars and will fail loudly
-    # in db_client if misconfigured — we never inject credentials here.
-    os.environ.setdefault("DB_BACKEND", "sqlite")
-
-    global db
-    db = get_db_client()
-    backend = os.getenv("DB_BACKEND", "sqlite")
-    logger.info(f"Connected to database backend: {backend}")
-
-    # Hard negative mining (issue #5) is PostgreSQL-only. Warn once at startup
-    # if it's been requested on a non-PostgreSQL backend so the operator knows
-    # telemetry capture is silently inactive.
-    if (
-        os.getenv("LORE_HARD_NEGATIVE_MINING", "false").strip().lower() == "true"
-        and not telemetry.mining_enabled()
-    ):
-        logger.warning(
-            "LORE_HARD_NEGATIVE_MINING=true but DB_BACKEND=%s is not PostgreSQL; "
-            "retrieval telemetry capture is disabled (PostgreSQL only).",
-            backend,
-        )
-
-    if args.host is not None or args.port is not None:
-        # HTTP/SSE mode — delegate to the wrapper, which mounts our 'app'.
-        import uvicorn
-
-        from .http_auth import auth_enabled, warn_if_insecure_bind
-        from .mcp_http_wrapper_sse import create_app
-
-        host = args.host or "127.0.0.1"
-        port = args.port or 5555
-        # Opt-in bearer auth (P1-8): enforced only when LORE_API_KEY is set.
-        # The create_app() wrapper installs the shared BearerAuthMiddleware;
-        # here we only emit the prominent warning when binding to a non-local
-        # host without a key (auth disabled => open on the LAN).
-        warn_if_insecure_bind(host)
-        logger.info(
-            "Starting Lore MCP HTTP server on %s:%s (auth %s)",
-            host,
-            port,
-            "ENABLED via LORE_API_KEY" if auth_enabled() else "DISABLED (open)",
-        )
-        starlette_app = create_app(app, "lore.server")
-        uvicorn.run(starlette_app, host=host, port=port, log_level="info")
-        return
-
-    logger.info("Starting Lore MCP server (stdio)")
-
-    async def _run() -> None:
-        async with stdio_server() as (read_stream, write_stream):
-            await app.run(read_stream, write_stream, app.create_initialization_options())
-
-    asyncio.run(_run())
+    _main()
 
 
 if __name__ == "__main__":

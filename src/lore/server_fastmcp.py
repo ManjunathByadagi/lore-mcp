@@ -959,7 +959,7 @@ def main() -> None:
     if args.version:
         from lore import __version__
 
-        print(f"lore-mcp (fastmcp) {__version__}")
+        print(f"lore-mcp {__version__}")
         return
 
     if args.host is not None or args.port is not None:

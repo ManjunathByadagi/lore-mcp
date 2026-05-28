@@ -85,7 +85,7 @@ test = [
 ]
 
 [project.scripts]
-lore-mcp = "lore.server:main"
+lore-mcp = "lore.server_fastmcp:main"
 
 [project.urls]
 Homepage = "https://github.com/davidgut1982/lore-mcp"
