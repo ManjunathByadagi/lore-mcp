@@ -27,12 +27,47 @@ All notable changes to this project are documented here.
   the CORS spec and is rejected by browsers. Credentials are now disabled
   automatically whenever origins are wildcard (`*`); set explicit origins via
   `LORE_CORS_ORIGINS` to re-enable credentialed CORS.
+- **Import-time DB double-init (P1-5).** `lore.server` connected to the database
+  at *import* time (`db = get_db_client()` at module scope). This ran before
+  `main()` / the FastMCP lifespan could apply the `DB_BACKEND=sqlite` default,
+  so it attempted a connection against whatever `DB_BACKEND` was in the
+  environment (defaulting to Supabase), logged a spurious failure, and opened a
+  stray client that was immediately discarded when startup re-initialised it.
+  The module global is now `db = None`; it is initialised exactly once — in
+  `lore.server.main()` (stdio/HTTP) and in `lore.server_fastmcp.lore_lifespan`
+  (FastMCP) — before any handler runs. Importing the module no longer triggers
+  any connection or error log. Handler call sites are unchanged.
+- **`mcp_index_scan` never reported modified servers (P1-7).** The scanner's
+  `changes["modified"]` list was hardcoded to `[]` behind a `# TODO`, so an
+  advertised capability silently under-reported. It now compares each scanned
+  server's `tool_count` against the prior stored value: a server present in both
+  the previous and current scan whose tool count changed (tools added/removed)
+  is reported as modified. A prior row with no recorded `tool_count` is left out
+  rather than reported as a false positive.
+
+### Changed
+- **Removed the unused `asyncpg>=0.28.0` core dependency (P1-4).** Lore's
+  PostgreSQL access is synchronous (`psycopg2`); nothing imports `asyncpg`.
+  Dropping it trims the install footprint with no behavioural change.
+- **Clarified the `kb_ingest_doc` `summary` strategy (P1-6).** Lore is
+  intentionally LLM-free, so it does not generate summaries — that belongs to
+  the LLM-capable caller/scheduler. Replaced the misleading
+  `# TODO: Implement GPT summary strategy` with a clear comment and error
+  message pointing callers to `full`/`chunked`, and updated the tool-schema
+  description accordingly. Tracked for documentation in
+  [#19](https://github.com/davidgut1982/lore-mcp/issues/19).
 
 ### Tests
 - New `tests/test_http_auth.py` — covers the shared auth helpers and verifies
   the middleware on all three transports: key-unset back-compat, 401 on
   missing/wrong/correct bearer, health-endpoint exemption, CORS credentials fix,
   and the non-localhost insecure-bind warning.
+- New `tests/test_mcp_index_scanner.py` (P1-7) — covers `scan_all_servers`
+  change detection: added (new server), modified (tool_count changed), unchanged
+  (no diff), and the no-false-positive case when the prior `tool_count` is `None`.
+- New `tests/test_basic.py::test_import_does_not_connect_to_db` (P1-5) —
+  re-imports `lore.server` under a `get_db_client` tripwire and asserts it is
+  never called at import and `server.db is None` until startup initialises it.
 
 ## [0.8.3] - 2026-05-27
 

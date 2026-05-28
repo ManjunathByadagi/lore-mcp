@@ -83,6 +83,10 @@ class MCPIndexScanner:
         # Get existing servers from DB
         existing_servers = self._get_existing_servers()
         existing_server_ids = {s["server_id"] for s in existing_servers}
+        # Prior tool_count per server, used for change detection below. A server
+        # present in both the prior and current scan whose tool_count differs is
+        # classified as "modified" (tools were added/removed for that server).
+        existing_tool_counts = {s["server_id"]: s.get("tool_count") for s in existing_servers}
 
         # Get configured servers if filtering enabled
         configured_servers = None
@@ -95,6 +99,7 @@ class MCPIndexScanner:
                 logger.debug(f"Configured servers: {configured_servers}")
 
         scanned_servers = []
+        scanned_tool_counts: dict[str, int] = {}
         all_tools = []
         errors = []
 
@@ -114,6 +119,7 @@ class MCPIndexScanner:
                     self._upsert_server(server_data)
                     self._upsert_tools(tools)
                     scanned_servers.append(server_data["server_id"])
+                    scanned_tool_counts[server_data["server_id"]] = server_data["tool_count"]
                     all_tools.extend(tools)
             except Exception as e:
                 error_msg = f"Error scanning {server_dir.name}: {str(e)}"
@@ -132,11 +138,28 @@ class MCPIndexScanner:
                 if server_id not in removed_servers:  # Don't change removed servers
                     self._mark_server_available(server_id)
 
-        # Calculate changes
+        # Calculate changes.
+        #
+        # "modified" = a server present in BOTH the prior and current scan whose
+        # tool_count changed (tools added or removed). We compare against the
+        # tool_count stored on the prior server rows. When the prior count is
+        # unknown (None — e.g. a row written before tool_count was recorded) we
+        # do not guess: the server is left out of "modified" rather than reported
+        # as a false positive.
+        modified_servers = []
+        for server_id in scanned_servers:
+            if server_id not in existing_server_ids:
+                continue  # newly added, handled below
+            prior_count = existing_tool_counts.get(server_id)
+            if prior_count is None:
+                continue  # no comparable prior signature — don't fabricate a diff
+            if scanned_tool_counts.get(server_id) != prior_count:
+                modified_servers.append(server_id)
+
         changes = {
             "added": [s for s in scanned_servers if s not in existing_server_ids],
             "removed": list(removed_servers),
-            "modified": [],  # TODO: Implement change detection
+            "modified": modified_servers,
         }
 
         # Record scan version

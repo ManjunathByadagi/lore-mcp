@@ -128,3 +128,44 @@ def test_sqlite_backend_enum_available():
 
     assert DatabaseBackend.SQLITE.value == "sqlite"
     assert DatabaseBackend.LOCAL.value == "local"
+
+
+def test_import_does_not_connect_to_db(monkeypatch):
+    """Importing lore.server must NOT initialise the DB at import time (P1-5).
+
+    Previously the module ran ``db = get_db_client()`` at import, which fired
+    before main()/the FastMCP lifespan could apply the DB_BACKEND=sqlite default
+    — producing a stray connection attempt and a logged error against whatever
+    backend happened to be in the environment. The fix sets ``db = None`` at
+    module level; main() and the FastMCP lifespan initialise it exactly once
+    before any handler runs.
+
+    This re-imports the module in isolation with get_db_client patched to a
+    tripwire, and asserts it is never called during import.
+    """
+    import importlib
+
+    import lore.db_client as db_client
+
+    called = {"count": 0}
+
+    def _tripwire(*_a, **_k):  # pragma: no cover - must never run at import
+        called["count"] += 1
+        raise AssertionError("get_db_client() was called at import time")
+
+    monkeypatch.delenv("DB_BACKEND", raising=False)
+    monkeypatch.setattr(db_client, "get_db_client", _tripwire)
+
+    import lore.server as server
+
+    # Reload to re-execute module top-level code under the tripwire patch.
+    importlib.reload(server)
+    try:
+        assert called["count"] == 0, "lore.server connected to the DB at import time"
+        # After a fresh import (before main()/lifespan run) the global is None.
+        assert server.db is None, "lore.server.db should be None until startup initialises it"
+    finally:
+        # Restore the real client so subsequent tests importing lore.server are
+        # unaffected by the patched/reloaded module state.
+        monkeypatch.undo()
+        importlib.reload(server)
