@@ -24,10 +24,10 @@ import pytest
 
 import lore.embeddings as emb
 
-
 # ---------------------------------------------------------------------------
 # Module-level fake for sentence_transformers (injected if not installed)
 # ---------------------------------------------------------------------------
+
 
 def _build_fake_st_module() -> types.ModuleType:
     """Return a minimal fake sentence_transformers module with a MagicMock class."""
