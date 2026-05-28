@@ -52,6 +52,10 @@ def fresh_server(monkeypatch):
     import lore.server as s
 
     importlib.reload(s)
+    # P1-5 moved db initialisation out of module scope into main()/lifespan.
+    # Tests that reload the module must manually wire up the db global so
+    # handlers have a live client before any request is dispatched.
+    s.db = s.get_db_client()
     return s
 
 
