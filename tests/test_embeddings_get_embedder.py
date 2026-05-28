@@ -10,15 +10,46 @@ Round 2 already covered the "semantic disabled" path. This file covers:
 - encode_text: delegates to encode_batch
 
 All tests mock SentenceTransformer — no heavy ML deps required.
+``sentence_transformers`` is injected into sys.modules as a MagicMock so
+these tests work even when the package is not installed.
 """
 
 from __future__ import annotations
 
+import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import lore.embeddings as emb
+
+
+# ---------------------------------------------------------------------------
+# Module-level fake for sentence_transformers (injected if not installed)
+# ---------------------------------------------------------------------------
+
+def _build_fake_st_module() -> types.ModuleType:
+    """Return a minimal fake sentence_transformers module with a MagicMock class."""
+    mod = types.ModuleType("sentence_transformers")
+    mod.SentenceTransformer = MagicMock  # type: ignore[attr-defined]
+    return mod
+
+
+@pytest.fixture(autouse=True)
+def _inject_sentence_transformers():
+    """Ensure sentence_transformers is importable during tests.
+
+    If the real package is installed we leave it in place; otherwise we
+    inject a lightweight fake so ``patch("sentence_transformers.SentenceTransformer")``
+    can resolve its target without a ModuleNotFoundError.
+    """
+    already_present = "sentence_transformers" in sys.modules
+    if not already_present:
+        sys.modules["sentence_transformers"] = _build_fake_st_module()
+    yield
+    if not already_present:
+        sys.modules.pop("sentence_transformers", None)
 
 
 @pytest.fixture(autouse=True)
