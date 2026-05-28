@@ -106,6 +106,10 @@ jobs:
             -f scripts/ci_bootstrap_schema.sql
 
       - name: Run integration tests
+        # --cov-fail-under=0: the integration suite only exercises Postgres paths
+        # (~35% coverage on its own), so the global fail_under threshold in
+        # pyproject.toml doesn't apply here. Coverage is still measured for
+        # visibility. The `test` job (unit suite) enforces the real floor.
         env:
           DB_BACKEND: postgres
           DB_HOST: localhost
@@ -120,4 +124,4 @@ jobs:
           LORE_SEMANTIC_SEARCH: "true"
           LORE_ENV: staging
           KNOWLEDGE_DATA_DIR: /tmp/lore-test-ci
-        run: pytest tests/integration/ -v --tb=short -m "integration or slow"
+        run: pytest tests/integration/ -v --tb=short -m "integration or slow" --cov-fail-under=0
