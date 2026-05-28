@@ -25,6 +25,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
+from lore import __version__ as _PACKAGE_VERSION
+
 
 class _SseResponse:
     """No-op Response for SSE endpoints."""
@@ -157,7 +159,7 @@ def create_app(mcp_server, server_name: str):
                         "tools": {"listChanged": False},
                         "resources": {"subscribe": False, "listChanged": False},
                     },
-                    "serverInfo": {"name": "knowledge-mcp-http", "version": "1.0.0"},
+                    "serverInfo": {"name": "lore-http", "version": _PACKAGE_VERSION},
                     "_meta": {"sessionId": session_id, "availableTools": tools_list},
                 }
 

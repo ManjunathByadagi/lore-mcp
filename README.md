@@ -2,7 +2,7 @@
 
 **`lore-knowledge-mcp`** · Operational knowledge layer for engineering teams and their AI agents.
 
-[![Version](https://img.shields.io/badge/version-0.6.0-blue)](https://github.com/davidgut1982/lore-mcp)
+[![PyPI version](https://img.shields.io/pypi/v/lore-knowledge-mcp)](https://pypi.org/project/lore-knowledge-mcp/)
 [![CI](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/davidgut1982/lore-mcp/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-green)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
@@ -259,22 +259,47 @@ That’s it. Lore is ready.
 | Setup required | None | Existing PostgreSQL instance |
 | Best for | Solo developers, local use | Teams, shared agents, production |
 | Config | `DB_BACKEND=sqlite` (default) | `DB_BACKEND=postgres` + connection vars |
-| Data location | `~/.local/share/lore/` | Your database |
+| Data location | `./knowledge-data/` (override with `KNOWLEDGE_DATA_DIR`) | Your database |
 
-**SQLite is the default.** No configuration needed — just install and run.
+**SQLite is the default.** No configuration needed — just install and run. The
+SQLite database and any local-file search corpus live under
+`KNOWLEDGE_DATA_DIR`, which defaults to `./knowledge-data` (a portable, relative
+path — set it to an absolute path for a stable on-disk location).
 
-**PostgreSQL** is for teams who want a shared knowledge layer accessible from multiple machines or agents simultaneously.
+**PostgreSQL** is for teams who want a shared knowledge layer accessible from
+multiple machines or agents simultaneously. `DB_BACKEND=postgres` (and the
+`postgresql` alias) select the bundled local PostgreSQL client — the same path
+as `DB_BACKEND=local`. Connection defaults are generic (`DB_NAME=lore`,
+`DB_USER=lore_user`); override them with the connection variables below.
 
 ```bash
 # PostgreSQL setup
-export DB_BACKEND=postgres
+export DB_BACKEND=postgres          # "postgresql" and "local" also work
 export DB_HOST=your-db-host
 export DB_PORT=5432
-export DB_NAME=lore
-export DB_USER=your-user
+export DB_NAME=lore                 # default: lore
+export DB_USER=your-user            # default: lore_user
 export DB_PASSWORD=your-password
 lore-mcp
 ```
+
+### Configuration reference
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `DB_BACKEND` | `sqlite` | `sqlite`, `postgres`/`postgresql`/`local`, or `supabase`. |
+| `KNOWLEDGE_DATA_DIR` | `./knowledge-data` | Root for the SQLite DB and local-file search. Portable by default — no `/srv` paths. |
+| `DB_NAME` | `lore` | PostgreSQL database name. |
+| `DB_USER` | `lore_user` | PostgreSQL user. |
+| `LATVIAN_LEARNING_ROOT` | _(unset)_ | Optional corpus root for `search_local`. Unset → that source is skipped. |
+| `LATVIAN_XTTS_ROOT` | _(unset)_ | Optional transcript root for `search_transcripts`. Unset → returns a clean "not configured" result. |
+| `INGEST_ROOT` | _(unset)_ | Optional corpora root for `search_corpora`. Unset → returns a clean "not configured" result. |
+
+The deployment-specific search roots (`LATVIAN_LEARNING_ROOT`,
+`LATVIAN_XTTS_ROOT`, `INGEST_ROOT`) are **unset by default**. When a root is not
+configured, the dependent search tool returns an empty, clearly-labelled "not
+configured" result instead of scanning a nonexistent path — so a fresh install
+works out of the box.
 
 ---
 

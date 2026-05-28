@@ -36,10 +36,18 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseBackend(Enum):
-    """Supported database backends."""
+    """Supported database backends.
+
+    ``POSTGRES`` / ``POSTGRESQL`` are aliases that route to the same local
+    PostgreSQL backend as ``LOCAL`` — the README documents
+    ``DB_BACKEND=postgres`` and ``_backend_kind()`` already treats those
+    spellings as the PostgreSQL path, so the enum must accept them too.
+    """
 
     SUPABASE = "supabase"
     LOCAL = "local"
+    POSTGRES = "postgres"
+    POSTGRESQL = "postgresql"
     SQLITE = "sqlite"
 
 
@@ -74,8 +82,8 @@ class LocalPostgresClient:
         self,
         host: str = "localhost",
         port: int = 5433,
-        database: str = "mpm_system",
-        user: str = "latvian_user",
+        database: str = "lore",
+        user: str = "lore_user",
         password: str = "",
     ):
         """Initialize local PostgreSQL connection."""
@@ -1631,13 +1639,15 @@ def get_db_client(
         Database client (LocalPostgresClient or SupabaseWrapper)
 
     Environment Variables:
-        DB_BACKEND: "local" or "supabase" (default: "supabase")
+        DB_BACKEND: "local"/"postgres"/"postgresql", "sqlite", or "supabase"
+            (default: "supabase"). "local", "postgres", and "postgresql" all
+            select the same local PostgreSQL backend.
 
-        For local:
+        For local PostgreSQL (local/postgres/postgresql):
             DB_HOST: PostgreSQL host (default: localhost)
             DB_PORT: PostgreSQL port (default: 5433)
-            DB_NAME: Database name (default: mpm_system)
-            DB_USER: Username (default: latvian_user)
+            DB_NAME: Database name (default: lore)
+            DB_USER: Username (default: lore_user)
             DB_PASSWORD: Password
 
         For supabase:
@@ -1652,12 +1662,17 @@ def get_db_client(
             logger.warning(f"Unknown DB_BACKEND '{backend_str}', falling back to supabase")
             backend = DatabaseBackend.SUPABASE
 
-    if backend == DatabaseBackend.LOCAL:
+    # LOCAL / POSTGRES / POSTGRESQL all map to the same local PostgreSQL client.
+    # The README tells users ``export DB_BACKEND=postgres``; without the alias
+    # check here that value used to fall through to the Supabase branch and
+    # crash demanding SUPABASE_URL. _backend_kind() already treats these three
+    # spellings as the PostgreSQL path — this keeps get_db_client() consistent.
+    if backend in (DatabaseBackend.LOCAL, DatabaseBackend.POSTGRES, DatabaseBackend.POSTGRESQL):
         return LocalPostgresClient(
             host=kwargs.get("host", os.getenv("DB_HOST", "localhost")),
             port=int(kwargs.get("port", os.getenv("DB_PORT", "5433"))),
-            database=kwargs.get("database", os.getenv("DB_NAME", "mpm_system")),
-            user=kwargs.get("user", os.getenv("DB_USER", "latvian_user")),
+            database=kwargs.get("database", os.getenv("DB_NAME", "lore")),
+            user=kwargs.get("user", os.getenv("DB_USER", "lore_user")),
             password=kwargs.get("password", os.getenv("DB_PASSWORD", "")),
         )
     elif backend == DatabaseBackend.SQLITE:

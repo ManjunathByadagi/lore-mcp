@@ -26,7 +26,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import jsonschema
 import sentry_sdk
@@ -35,6 +35,7 @@ from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from . import __version__ as _PACKAGE_VERSION
 from . import telemetry
 from .db_client import DatabaseBackend, get_db_client
 
@@ -57,12 +58,12 @@ if SENTRY_DSN:
         dsn=SENTRY_DSN,
         traces_sample_rate=1.0,
         environment=get_env("SENTRY_ENVIRONMENT", "development"),
-        release=get_env("SENTRY_RELEASE", "latvian-lab@1.0.0"),
+        release=get_env("SENTRY_RELEASE", f"lore-knowledge-mcp@{_PACKAGE_VERSION}"),
     )
     logger.info("Sentry monitoring enabled")
 
 # Initialize MCP server
-app = Server("knowledge-mcp")
+app = Server("lore")
 
 # Database Configuration (will be initialized in main())
 # Database Configuration
@@ -75,11 +76,30 @@ except Exception as e:
     db = None
 
 
-# Search Configuration (consolidated from search-mcp)
-LATVIAN_LEARNING_ROOT = Path(get_env("LATVIAN_LEARNING_ROOT", "/srv/latvian_learning"))
-LATVIAN_XTTS_ROOT = Path(get_env("LATVIAN_XTTS_ROOT", "/srv/latvian_xtts"))
-INGEST_ROOT = Path(get_env("INGEST_ROOT", "/srv/ingest"))
-KNOWLEDGE_DATA_DIR = Path(get_env("KNOWLEDGE_DATA_DIR", "/srv/latvian_mcp/data/knowledge"))
+# Search Configuration (consolidated from search-mcp).
+#
+# These roots are optional, deployment-specific corpora locations. They are
+# env-var driven with portable defaults so a fresh public install never points
+# at a nonexistent /srv/* path:
+#   - KNOWLEDGE_DATA_DIR defaults to ./knowledge-data, matching the SQLite
+#     fallback (see db_client.get_db_client) so local-file search and the
+#     default DB live in the same place.
+#   - LATVIAN_LEARNING_ROOT / LATVIAN_XTTS_ROOT / INGEST_ROOT default to None
+#     (unset). The dependent tools (search_transcripts, search_corpora,
+#     search_local) detect the unset root and return a clean empty result with
+#     a "not configured" message instead of scanning a path that doesn't exist.
+def _optional_root(env_key: str) -> Path | None:
+    """Return a Path for ``env_key`` when set/non-empty, else None."""
+    raw = get_env(env_key)
+    if raw is None or not raw.strip():
+        return None
+    return Path(raw.strip())
+
+
+LATVIAN_LEARNING_ROOT: Path | None = _optional_root("LATVIAN_LEARNING_ROOT")
+LATVIAN_XTTS_ROOT: Path | None = _optional_root("LATVIAN_XTTS_ROOT")
+INGEST_ROOT: Path | None = _optional_root("INGEST_ROOT")
+KNOWLEDGE_DATA_DIR = Path(get_env("KNOWLEDGE_DATA_DIR", "./knowledge-data"))
 
 
 def json_serializer(obj):
@@ -3991,9 +4011,12 @@ def search_file_content(file_path: Path, query: str) -> dict | None:
 def handle_search_local(query: str, paths: list[str] = None, file_types: list[str] = None) -> dict:
     """Search local files by content."""
     try:
-        # Default paths
+        # Default paths. The Latvian roots are optional and may be unset (None);
+        # skip those so we never scan a literal "None" path. KNOWLEDGE_DATA_DIR
+        # always has a portable default and is always included.
         if not paths:
-            paths = [str(LATVIAN_LEARNING_ROOT), str(LATVIAN_XTTS_ROOT), str(KNOWLEDGE_DATA_DIR)]
+            default_roots = [LATVIAN_LEARNING_ROOT, LATVIAN_XTTS_ROOT, KNOWLEDGE_DATA_DIR]
+            paths = [str(root) for root in default_roots if root is not None]
 
         # Default file types
         if not file_types:
@@ -4036,6 +4059,15 @@ def handle_search_local(query: str, paths: list[str] = None, file_types: list[st
 def handle_search_corpora(query: str, corpus_ids: list[str] = None) -> dict:
     """Search across corpus manifests."""
     try:
+        # INGEST_ROOT is an optional, deployment-specific corpora location. When
+        # it is unset (the portable default) there is no data source to search,
+        # so return a clean empty result instead of crashing on ``None / "..."``.
+        if INGEST_ROOT is None:
+            return ResponseEnvelope.success(
+                "Corpora search not configured (set INGEST_ROOT to enable)",
+                {"results": [], "total_matches": 0},
+            )
+
         results = []
         corpora_dir = INGEST_ROOT / "corpora"
 
@@ -4090,6 +4122,16 @@ def handle_search_corpora(query: str, corpus_ids: list[str] = None) -> dict:
 def handle_search_transcripts(query: str, speaker: str = None) -> dict:
     """Search transcript segments."""
     try:
+        # LATVIAN_XTTS_ROOT is an optional, deployment-specific transcript
+        # location. When unset (the portable default) there is nothing to
+        # search, so return a clean empty result instead of crashing on
+        # ``None / "whisper_extracted"``.
+        if LATVIAN_XTTS_ROOT is None:
+            return ResponseEnvelope.success(
+                "Transcript search not configured (set LATVIAN_XTTS_ROOT to enable)",
+                {"results": [], "total_matches": 0},
+            )
+
         results = []
 
         # Search in whisper extracted directories

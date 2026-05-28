@@ -57,6 +57,7 @@ from starlette.responses import JSONResponse
 # Importing lore.server is intentional: it owns the module-global ``db`` and
 # the handler functions. We rebind ``lore.server.db`` in the lifespan.
 # ---------------------------------------------------------------------------
+from lore import __version__ as _PACKAGE_VERSION
 from lore import server as _srv
 from lore.db_client import get_db_client
 from lore.response import ErrorCodes, ResponseEnvelope
@@ -154,7 +155,7 @@ async def lore_lifespan(server: FastMCP):  # noqa: ANN201 - FastMCP lifespan sig
     yield {}
 
 
-mcp: FastMCP = FastMCP("knowledge-mcp", version="0.6.0", lifespan=lore_lifespan)
+mcp: FastMCP = FastMCP("lore", version=_PACKAGE_VERSION, lifespan=lore_lifespan)
 
 
 # ---------------------------------------------------------------------------
