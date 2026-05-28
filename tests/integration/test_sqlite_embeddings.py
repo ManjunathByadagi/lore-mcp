@@ -241,6 +241,8 @@ def test_legacy_lexical_path_still_works_with_flag_off(monkeypatch):
     import lore.server as s
 
     importlib.reload(s)
+    # P1-5: db is None after reload — wire it up before any handler call.
+    s.db = s.get_db_client()
 
     s.handle_kb_add(topic="t", title="findme", content="legacy lexical search")
     resp = s.handle_kb_search(query="findme")
