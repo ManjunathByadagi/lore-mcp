@@ -146,6 +146,13 @@ class MCPIndexScanner:
         # unknown (None — e.g. a row written before tool_count was recorded) we
         # do not guess: the server is left out of "modified" rather than reported
         # as a false positive.
+        #
+        # KNOWN LIMITATION: tool renames/swaps that leave the count unchanged
+        # are NOT detected.  If server A had tools [foo, bar] and now has
+        # [foo, baz] (bar renamed to baz), the tool_count is still 2 and this
+        # server will NOT appear in ``changes["modified"]``.  Detecting
+        # name-level diffs would require storing and comparing the full tool-name
+        # set per server, which is tracked for a future enhancement.
         modified_servers = []
         for server_id in scanned_servers:
             if server_id not in existing_server_ids:

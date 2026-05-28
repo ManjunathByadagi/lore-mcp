@@ -149,7 +149,7 @@ def test_import_does_not_connect_to_db(monkeypatch):
 
     called = {"count": 0}
 
-    def _tripwire(*_a, **_k):  # pragma: no cover - must never run at import
+    def _tripwire(*_a, **_k):
         called["count"] += 1
         raise AssertionError("get_db_client() was called at import time")
 
