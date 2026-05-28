@@ -41,25 +41,10 @@
 # ---
 # name: test_tool_schema_snapshot[cluster_results]
   dict({
-    'description': 'Cluster search results by topic/source type',
+    'description': 'Group results into metadata-based buckets (such as file type, corpus, speaker, or other categories).',
     'inputSchema': dict({
       'additionalProperties': False,
       'properties': dict({
-        'n_clusters': dict({
-          'anyOf': list([
-            dict({
-              'type': 'integer',
-            }),
-            dict({
-              'type': 'null',
-            }),
-          ]),
-          'default': None,
-        }),
-        'num_clusters': dict({
-          'default': 5,
-          'type': 'integer',
-        }),
         'results': dict({
           'items': dict({
             'additionalProperties': True,

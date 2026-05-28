@@ -619,16 +619,12 @@ def deduplicate_results(results: list[dict], threshold: float = 0.9) -> str:
     return _json(_srv.handle_deduplicate_results(results=results, threshold=threshold))
 
 
-@mcp.tool(description="Cluster search results by topic/source type")
-def cluster_results(
-    results: list[dict], num_clusters: int = 5, n_clusters: int | None = None
-) -> str:
-    # n_clusters is accepted as an alias for num_clusters (QA compat). Clustering
-    # is automatic (by file/source key), so neither value affects the grouping —
-    # both are forwarded only for signature compatibility.
-    if n_clusters is not None:
-        num_clusters = n_clusters
-    return _json(_srv.handle_cluster_results(results=results, num_clusters=num_clusters))
+@mcp.tool(description=(
+    "Group results into metadata-based buckets (such as file type, "
+    "corpus, speaker, or other categories)."
+))
+def cluster_results(results: list[dict]) -> str:
+    return _json(_srv.handle_cluster_results(results=results))
 
 
 # --- Retrieval Telemetry (3) — Issue #5 Phase 2 ----------------------------

@@ -281,7 +281,7 @@ That’s it. Lore is ready.
 | `search_local` | Search local files by content. |
 | `search_transcripts` | Search Whisper transcript segments. |
 | `deduplicate_results` | Deduplicate a result set by similarity threshold. |
-| `cluster_results` | Cluster results by topic. |
+| `cluster_results` | Group results into metadata-based buckets (such as file type, corpus, speaker, or other categories). |
 
 ---
 

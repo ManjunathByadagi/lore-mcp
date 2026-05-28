@@ -897,7 +897,10 @@ _TOOL_DEFINITIONS = [
     ),
     types.Tool(
         name="cluster_results",
-        description="Cluster search results by topic/source type",
+        description=(
+            "Group results into metadata-based buckets (such as file type, "
+            "corpus, speaker, or other categories)."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -905,10 +908,6 @@ _TOOL_DEFINITIONS = [
                     "type": "array",
                     "items": {"type": "object"},
                     "description": "Array of search result objects",
-                },
-                "num_clusters": {
-                    "type": "integer",
-                    "description": "Number of clusters (default: 5)",
                 },
             },
             "required": ["results"],
@@ -4284,15 +4283,8 @@ def handle_deduplicate_results(results: list[dict], threshold: float = 0.9) -> d
         return ResponseEnvelope.error(ErrorCodes.UNEXPECTED_EXCEPTION, str(e))
 
 
-def handle_cluster_results(
-    results: list[dict], num_clusters: int = 5, n_clusters: int | None = None
-) -> dict:
-    """Cluster search results by topic.
-
-    ``n_clusters`` is accepted as an alias for ``num_clusters`` (QA compat).
-    Clustering is automatic (grouped by file/source key), so neither value
-    affects the grouping — both are accepted only for signature compatibility.
-    """
+def handle_cluster_results(results: list[dict]) -> dict:
+    """Group search results by source type."""
     try:
         clusters = {}
 
@@ -4315,7 +4307,7 @@ def handle_cluster_results(
         cluster_summary = {cluster: len(items) for cluster, items in clusters.items()}
 
         return ResponseEnvelope.success(
-            f"Clustered {len(results)} results into {len(clusters)} groups",
+            f"Grouped {len(results)} results into {len(clusters)} buckets",
             {
                 "clusters": clusters,
                 "cluster_summary": cluster_summary,

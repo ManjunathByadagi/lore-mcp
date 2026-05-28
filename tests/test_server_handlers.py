@@ -286,6 +286,31 @@ def test_deduplicate_results_still_dedupes_on_content():
     assert resp["data"]["removed_count"] == 1
 
 
+def test_cluster_results_schema_has_no_cluster_count_params():
+    schema = srv._TOOL_SCHEMA_MAP["cluster_results"]
+    props = schema["properties"]
+    assert "num_clusters" not in props
+    assert "n_clusters" not in props
+    assert list(props) == ["results"]
+
+
+def test_cluster_results_groups_by_source_bucket():
+    results = [
+        {"file": "docs/guide.md", "title": "Guide"},
+        {"file": "src/app.py", "title": "App"},
+        {"corpus": "research", "title": "Note"},
+        {"speaker": "alice", "title": "Transcript"},
+        {"title": "Fallback"},
+    ]
+
+    resp = srv.handle_cluster_results(results=results)
+
+    assert resp["ok"] is True
+    assert resp["data"]["total_results"] == 5
+    assert set(resp["data"]["cluster_summary"]) == {".md", ".py", "corpus", "transcript", "other"}
+    assert resp["data"]["cluster_summary"]["other"] == 1
+
+
 # ---------------------------------------------------------------------------
 # BUG-7: log_retrieval_feedback rejects out-of-range user_feedback_score
 # ---------------------------------------------------------------------------
