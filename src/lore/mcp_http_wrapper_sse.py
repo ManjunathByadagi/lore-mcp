@@ -26,6 +26,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from lore import __version__ as _PACKAGE_VERSION
+from lore.http_auth import BearerAuthMiddleware, cors_config
 
 
 class _SseResponse:
@@ -336,15 +337,13 @@ def create_app(mcp_server, server_name: str):
         Route("/health", health_check, methods=["GET"]),
     ]
 
-    # Create Starlette app with CORS middleware
+    # Middleware order matters: CORS is outermost so preflight/responses are
+    # handled even for 401s, then the opt-in bearer-auth gate. Auth is a no-op
+    # unless LORE_API_KEY is set (see lore.http_auth). cors_config() fixes the
+    # legacy allow_origins=["*"] + allow_credentials=True spec violation.
     middleware = [
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        Middleware(CORSMiddleware, **cors_config()),
+        Middleware(BearerAuthMiddleware),
     ]
 
     return Starlette(routes=routes, middleware=middleware)

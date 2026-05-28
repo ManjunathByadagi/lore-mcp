@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+- **Opt-in bearer-token auth for HTTP transports (P1-8).** Set `LORE_API_KEY`
+  to require `Authorization: Bearer <key>` on all HTTP/SSE requests; missing or
+  wrong tokens get a `401 {"error":"unauthorized"}` (constant-time compare).
+  Auth is **opt-in**: when `LORE_API_KEY` is unset the HTTP surfaces behave
+  exactly as before (open), so existing no-auth deployments keep working. The
+  check is applied consistently across all three HTTP surfaces — `lore.server`
+  (`--host/--port`), `lore.server_fastmcp` (FastMCP HTTP), and the SSE wrapper
+  `lore.mcp_http_wrapper_sse` — via a shared `lore.http_auth` middleware. Health
+  endpoints (`/health`, `/healthz`, `/ready`, `/readyz`, `/`) are exempt so
+  liveness probes work even with a key set. stdio mode is unaffected.
+- A prominent startup **WARNING** is logged when binding HTTP to a non-localhost
+  host (`0.0.0.0` / a LAN IP) without `LORE_API_KEY` set, since the server is
+  then reachable on the network with no authentication.
+- `LORE_CORS_ORIGINS` (comma-separated, default `*`) makes the CORS allow-list
+  configurable.
+
+### Fixed
+- **Invalid CORS configuration.** The HTTP transports previously sent
+  `allow_origins=["*"]` together with `allow_credentials=True`, which violates
+  the CORS spec and is rejected by browsers. Credentials are now disabled
+  automatically whenever origins are wildcard (`*`); set explicit origins via
+  `LORE_CORS_ORIGINS` to re-enable credentialed CORS.
+
+### Tests
+- New `tests/test_http_auth.py` — covers the shared auth helpers and verifies
+  the middleware on all three transports: key-unset back-compat, 401 on
+  missing/wrong/correct bearer, health-endpoint exemption, CORS credentials fix,
+  and the non-localhost insecure-bind warning.
+
 ## [0.8.3] - 2026-05-27
 
 Public-readiness cleanup — remove leftover homelab-specific defaults and fix the

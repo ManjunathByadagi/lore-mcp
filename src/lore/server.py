@@ -4382,12 +4382,23 @@ def main() -> None:
         # HTTP/SSE mode — delegate to the wrapper, which mounts our 'app'.
         import uvicorn
 
+        from .http_auth import auth_enabled, warn_if_insecure_bind
         from .mcp_http_wrapper_sse import create_app
 
         host = args.host or "127.0.0.1"
         port = args.port or 5555
+        # Opt-in bearer auth (P1-8): enforced only when LORE_API_KEY is set.
+        # The create_app() wrapper installs the shared BearerAuthMiddleware;
+        # here we only emit the prominent warning when binding to a non-local
+        # host without a key (auth disabled => open on the LAN).
+        warn_if_insecure_bind(host)
+        logger.info(
+            "Starting Lore MCP HTTP server on %s:%s (auth %s)",
+            host,
+            port,
+            "ENABLED via LORE_API_KEY" if auth_enabled() else "DISABLED (open)",
+        )
         starlette_app = create_app(app, "lore.server")
-        logger.info(f"Starting Lore MCP HTTP server on {host}:{port}")
         uvicorn.run(starlette_app, host=host, port=port, log_level="info")
         return
 

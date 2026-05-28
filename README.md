@@ -163,7 +163,33 @@ lore-mcp
 
 # HTTP mode (for remote or multi-agent access)
 lore-mcp --host 0.0.0.0 --port 8000
+
+# HTTP mode WITH authentication (recommended for teams / LAN exposure)
+LORE_API_KEY="$(openssl rand -hex 32)" lore-mcp --host 0.0.0.0 --port 8000
 ```
+
+#### Authentication (`LORE_API_KEY`)
+
+HTTP auth is **opt-in** and off by default:
+
+- **`LORE_API_KEY` unset** → the HTTP server is **open** (no auth), exactly as
+  before. This keeps existing no-auth deployments working. When you bind to a
+  non-localhost host (`0.0.0.0` or a LAN IP) without a key, Lore logs a
+  prominent startup **WARNING** that the server is reachable on your network
+  with no authentication.
+- **`LORE_API_KEY` set** → every HTTP/SSE request must include
+  `Authorization: Bearer <key>`. Missing or wrong tokens get
+  `401 {"error":"unauthorized"}` (token compared in constant time). Health
+  endpoints (`/health`, `/healthz`, `/`) stay open so liveness probes keep
+  working. **stdio mode is never affected** — it has no network surface.
+
+The same rule applies across all HTTP entry points (`lore-mcp --host/--port`,
+the FastMCP server, and the SSE wrapper).
+
+**CORS:** origins default to `*` with credentials disabled (the spec forbids
+`*` + credentials). Set `LORE_CORS_ORIGINS` to a comma-separated allow-list
+(e.g. `https://app.example.com,https://admin.example.com`) to restrict origins;
+credentialed CORS is enabled automatically when origins are explicit.
 
 ### 3. Add to your MCP client
 
@@ -180,18 +206,25 @@ lore-mcp --host 0.0.0.0 --port 8000
 }
 ```
 
-Or for HTTP mode (recommended for teams):
+Or for HTTP mode (recommended for teams). When the server is started with
+`LORE_API_KEY` set, include a matching bearer token in the client config:
 
 ```json
 {
   "mcpServers": {
     "lore": {
       "type": "http",
-      "url": "http://localhost:8000/mcp"
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <your LORE_API_KEY>"
+      }
     }
   }
 }
 ```
+
+If the server is started without `LORE_API_KEY`, omit the `headers` block — the
+endpoint is open.
 
 That’s it. Lore is ready.
 
@@ -294,6 +327,8 @@ lore-mcp
 | `LATVIAN_LEARNING_ROOT` | _(unset)_ | Optional corpus root for `search_local`. Unset → that source is skipped. |
 | `LATVIAN_XTTS_ROOT` | _(unset)_ | Optional transcript root for `search_transcripts`. Unset → returns a clean "not configured" result. |
 | `INGEST_ROOT` | _(unset)_ | Optional corpora root for `search_corpora`. Unset → returns a clean "not configured" result. |
+| `LORE_API_KEY` | _(unset)_ | **Opt-in HTTP auth.** Set → require `Authorization: Bearer <key>` on HTTP/SSE requests (401 otherwise). Unset → HTTP is open (and a warning is logged on non-localhost binds). stdio is never affected. |
+| `LORE_CORS_ORIGINS` | `*` | Comma-separated CORS allow-list. `*` (default) disables credentials per the CORS spec; explicit origins enable credentialed CORS. |
 
 The deployment-specific search roots (`LATVIAN_LEARNING_ROOT`,
 `LATVIAN_XTTS_ROOT`, `INGEST_ROOT`) are **unset by default**. When a root is not
