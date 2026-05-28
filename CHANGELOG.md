@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-05-27
+
 ### Added
 - **Opt-in bearer-token auth for HTTP transports (P1-8).** Set `LORE_API_KEY`
   to require `Authorization: Bearer <key>` on all HTTP/SSE requests; missing or
@@ -68,6 +70,15 @@ All notable changes to this project are documented here.
 - New `tests/test_basic.py::test_import_does_not_connect_to_db` (P1-5) —
   re-imports `lore.server` under a `get_db_client` tripwire and asserts it is
   never called at import and `server.db is None` until startup initialises it.
+- **Postgres integration CI job (P1-2).** A dedicated `integration` job in
+  `.github/workflows/ci.yml` spins up a real PostgreSQL service container and
+  runs 45 tests covering KB CRUD, FTS, semantic search, and pgvector hybrid
+  paths on every push and pull request. `develop` branch added to CI push
+  triggers alongside `main`.
+- Fixed misleading `create_local_schema.sql` — primary key column changed from
+  `INTEGER` to `TEXT` to match the application schema (`kb_id` is a UUID
+  string). Prevents confusion when using the file to bootstrap a local Postgres
+  database manually.
 
 ## [0.8.3] - 2026-05-27
 
