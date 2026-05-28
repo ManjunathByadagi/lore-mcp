@@ -184,9 +184,9 @@ source = ["src"]
 branch = true
 
 [tool.coverage.report]
-# Coverage floor — raised after round-1 unit test push (~40% → ~49%).
-# Set 3 points below measured unit-suite baseline (49%) to give headroom.
-fail_under = 46
+# Coverage floor — raised after round-2 unit test push (~57% → ~64%).
+# Set 3 points below measured unit-suite baseline (64.3%) to give headroom.
+fail_under = 61
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
