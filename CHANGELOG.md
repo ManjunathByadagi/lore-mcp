@@ -4,6 +4,57 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-05-28
+
+### Changed
+- **Entry point consolidation**: `lore-mcp` console script now invokes
+  `lore.server_fastmcp:main` (FastMCP) directly. Stdio + HTTP modes are
+  unchanged; CLI flags are preserved. Production deployments already used
+  FastMCP (`python -m lore.server_fastmcp`), so there is no operational change.
+- `lore.server:main` is now a deprecation shim that delegates to
+  `lore.server_fastmcp:main`. `python -m lore.server` emits a
+  `DeprecationWarning` but still works.
+- `--version` output normalised to `lore-mcp <version>` across both entry
+  points (previously `lore.server_fastmcp` printed `lore-mcp (fastmcp) ...`).
+- `docker/knowledge-mcp.service` `ExecStart` updated to the canonical
+  `lore-mcp --host 0.0.0.0 --port 5555` invocation.
+
+### Removed
+- `lore.mcp_http_wrapper_sse` (the legacy SSE/JSON-RPC HTTP wrapper). FastMCP's
+  `/mcp`, `/jsonrpc`, `/health`, and `/stream` endpoints provide the full HTTP
+  surface. The retired wrapper returned SSE-framed responses
+  (`event: message\ndata: <json>`); FastMCP returns bare JSON (which all known
+  clients — Hermes, mcpo, OWUI — already use).
+- Unused `asyncpg>=0.28.0` core dependency. Lore's PostgreSQL access is
+  synchronous (`psycopg2`); nothing imports `asyncpg`. Dropping it trims
+  ~15 MB from the install footprint with no behavioural change.
+
+### Added
+- **Tool schema snapshot tests** (syrupy) — 38 MCP tools each get a snapshot
+  of name + description + inputSchema + outputSchema. Any accidental interface
+  change fails CI with a precise per-tool diff, guarding the MCP surface against
+  unintended regressions.
+- **Postgres integration CI job** — 45 Postgres tests (KB CRUD, FTS, semantic
+  and hybrid search via pgvector, telemetry) run on every push and pull request.
+- `develop` branch added to CI push triggers so the integration job validates
+  before any release merge.
+
+### Fixed
+- **Lazy DB initialisation**: `lore.server` no longer attempts a DB connection
+  at import time. The module global is `db = None`; it is initialised in
+  `main()` (stdio/HTTP) and `lore_lifespan` (FastMCP) before any handler runs.
+  Importing the module no longer triggers any connection attempt or error log.
+- Resolved stale TODOs: doc-summary strategy clarified (LLM-free; delegated to
+  caller/scheduler, tracked in [#19](https://github.com/davidgut1982/lore-mcp/issues/19));
+  `mcp_index_scan` `modified` change-detection implemented (compares `tool_count`
+  against prior stored value).
+
+### Testing
+- Coverage floor raised from 30% to 66% (measured 68.76% in CI).
+- 924 unit tests + 45 Postgres integration tests.
+- `make lint` now mirrors CI exactly (`ruff check` + `ruff format --check` on
+  `src/` and `tests/`).
+
 ## [0.8.4] - 2026-05-27
 
 ### Added

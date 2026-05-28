@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lore-knowledge-mcp"
-version = "0.8.4"
+version = "0.8.5"
 description = "Unified knowledge management MCP server with document intelligence and research workflows"
 readme = "README.md"
 license = {text = "MIT"}
@@ -69,6 +69,7 @@ dev = [
     "mypy>=1.5.0",
     "ruff>=0.1",
     "pre-commit>=3.3.0",
+    "syrupy>=4",
 ]
 docs = [
     "mkdocs>=1.5.0",
@@ -85,7 +86,7 @@ test = [
 ]
 
 [project.scripts]
-lore-mcp = "lore.server:main"
+lore-mcp = "lore.server_fastmcp:main"
 
 [project.urls]
 Homepage = "https://github.com/davidgut1982/lore-mcp"
@@ -184,9 +185,9 @@ source = ["src"]
 branch = true
 
 [tool.coverage.report]
-# Coverage floor — set to the current measured coverage (31%) rounded down to
-# the nearest 5. Raise this as the integration/e2e gaps get unit-test coverage.
-fail_under = 30
+# Coverage floor — raised after round-3 unit test push (~64.5% → ~69%).
+# Set 3 points below measured unit-suite baseline (68.99%) to give headroom.
+fail_under = 66
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -198,4 +199,9 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
+]
+
+[dependency-groups]
+dev = [
+    "syrupy>=4",
 ]

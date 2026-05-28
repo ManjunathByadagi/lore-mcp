@@ -1,11 +1,8 @@
-"""Opt-in bearer-token authentication for Lore's HTTP/SSE transports (P1-8).
+"""Opt-in bearer-token authentication for Lore's HTTP transport (P1-8).
 
-Shared by all three HTTP-serving surfaces so the auth contract is identical
-everywhere:
+Applied to the consolidated FastMCP HTTP surface (P1-3):
 
-  * ``lore.server``            (--host/--port HTTP mode -> delegates to the SSE wrapper)
   * ``lore.server_fastmcp``    (FastMCP HTTP — what production runs)
-  * ``lore.mcp_http_wrapper_sse`` (the SSE wrapper)
 
 Design (do NOT break existing deployments):
 

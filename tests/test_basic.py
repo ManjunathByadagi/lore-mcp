@@ -169,3 +169,38 @@ def test_import_does_not_connect_to_db(monkeypatch):
         # unaffected by the patched/reloaded module state.
         monkeypatch.undo()
         importlib.reload(server)
+
+
+def test_server_main_is_deprecation_shim(monkeypatch):
+    """lore.server.main must emit DeprecationWarning and delegate to lore.server_fastmcp.main.
+
+    P1-3 entry-point consolidation: `lore-mcp` console script now invokes
+    lore.server_fastmcp:main directly. lore.server.main is retained as a
+    back-compat shim for users still running `python -m lore.server`.
+    """
+    import sys
+
+    from lore import server, server_fastmcp
+
+    called = {"count": 0}
+
+    def _fake_main() -> None:
+        called["count"] += 1
+
+    # Patch the delegated target so we don't actually start a server.
+    monkeypatch.setattr(server_fastmcp, "main", _fake_main)
+
+    # The shim does `from lore.server_fastmcp import main as _main` inside its
+    # body, so monkeypatching the attribute on the module is sufficient
+    # (the import resolves the current attribute value at call time).
+    original_argv = sys.argv
+    sys.argv = ["lore-mcp", "--version"]
+    try:
+        with pytest.warns(DeprecationWarning, match="lore.server:main is deprecated"):
+            server.main()
+    finally:
+        sys.argv = original_argv
+
+    assert called["count"] == 1, (
+        "lore.server.main() must delegate exactly once to lore.server_fastmcp.main"
+    )

@@ -1,0 +1,1862 @@
+# serializer version: 1
+# name: test_tool_schema_snapshot[backfill_query_embeddings]
+  dict({
+    'description': 'Backfill query_embedding column in retrieval_telemetry for rows that predate Phase 4a. Processes rows in batches. Set build_index=true to also create the HNSW index after backfill.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'batch_size': dict({
+          'default': 32,
+          'type': 'integer',
+        }),
+        'build_index': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'dry_run': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'limit': dict({
+          'default': 1000,
+          'type': 'integer',
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'backfill_query_embeddings',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[cluster_results]
+  dict({
+    'description': 'Cluster search results by topic/source type',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'n_clusters': dict({
+          'anyOf': list([
+            dict({
+              'type': 'integer',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'num_clusters': dict({
+          'default': 5,
+          'type': 'integer',
+        }),
+        'results': dict({
+          'items': dict({
+            'additionalProperties': True,
+            'type': 'object',
+          }),
+          'type': 'array',
+        }),
+      }),
+      'required': list([
+        'results',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'cluster_results',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[deduplicate_results]
+  dict({
+    'description': 'Remove duplicate search results based on text similarity',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'results': dict({
+          'items': dict({
+            'additionalProperties': True,
+            'type': 'object',
+          }),
+          'type': 'array',
+        }),
+        'threshold': dict({
+          'default': 0.9,
+          'type': 'number',
+        }),
+      }),
+      'required': list([
+        'results',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'deduplicate_results',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[get_hard_negatives]
+  dict({
+    'description': 'Read hard negative (query, document) pairs from knowledge.hard_negative_pairs. Filter by signal_type (explicit/behavioral/all), doc_id, or query_text_like. Returns pairs sorted by occurrence_count DESC.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'doc_id': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'limit': dict({
+          'default': 100,
+          'type': 'integer',
+        }),
+        'query_text_like': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'signal_type': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'get_hard_negatives',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[get_retrieval_telemetry]
+  dict({
+    'description': 'Read retrieval telemetry rows (issue #5). Selector precedence: query_id > session_id > topic > recent. Returns newest-first.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'limit': dict({
+          'default': 50,
+          'type': 'integer',
+        }),
+        'query_id': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'session_id': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'topic': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'get_retrieval_telemetry',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[get_telemetry_stats]
+  dict({
+    'description': 'Aggregate retrieval telemetry stats (issue #5): totals, feedback coverage, requery count, average score, oldest/newest timestamps. Optionally scoped by session_id and/or topic.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'session_id': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'topic': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'get_telemetry_stats',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[investigation_add]
+  dict({
+    'description': 'Add an investigation entry (open or append to an ops investigation)',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'content': dict({
+          'type': 'string',
+        }),
+        'tags': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'title': dict({
+          'type': 'string',
+        }),
+        'topic': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'topic',
+        'title',
+        'content',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'investigation_add',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[investigation_get]
+  dict({
+    'description': 'Get a single investigation entry by ID',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'note_id': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'note_id',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'investigation_get',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[investigation_list]
+  dict({
+    'description': 'List investigations',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'topic': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'investigation_list',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[investigation_list_experiments]
+  dict({
+    'description': 'List logged investigation experiments',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+      }),
+      'type': 'object',
+    }),
+    'name': 'investigation_list_experiments',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[investigation_log_experiment]
+  dict({
+    'description': 'Log a structured experiment within an investigation (hypothesis, methodology, results, conclusion)',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'conclusion': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'hypothesis': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'methodology': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'results': dict({
+          'anyOf': list([
+            dict({
+              'additionalProperties': True,
+              'type': 'object',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'title': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'title',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'investigation_log_experiment',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[journal_append]
+  dict({
+    'description': 'Append journal entry',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'content': dict({
+          'type': 'string',
+        }),
+        'entry_type': dict({
+          'enum': list([
+            'daily',
+            'milestone',
+            'reflection',
+            'idea',
+          ]),
+          'type': 'string',
+        }),
+        'tags': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'required': list([
+        'entry_type',
+        'content',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'journal_append',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[journal_get]
+  dict({
+    'description': 'Get journal entry',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'entry_id': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'entry_id',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'journal_get',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[journal_list]
+  dict({
+    'description': 'List journal entries',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'limit': dict({
+          'default': 20,
+          'type': 'integer',
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'journal_list',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[journal_search]
+  dict({
+    'description': 'Full-text search across journal entry content (Issue #15)',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'date_from': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'date_to': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'entry_type': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'limit': dict({
+          'default': 20,
+          'type': 'integer',
+        }),
+        'query': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'query',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'journal_search',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_add]
+  dict({
+    'description': 'Add a knowledge base entry',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'author': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'content': dict({
+          'type': 'string',
+        }),
+        'source_type': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'tags': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'title': dict({
+          'type': 'string',
+        }),
+        'topic': dict({
+          'type': 'string',
+        }),
+        'trust_score': dict({
+          'default': 1.0,
+          'type': 'number',
+        }),
+      }),
+      'required': list([
+        'topic',
+        'title',
+        'content',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'kb_add',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_backfill_embeddings]
+  dict({
+    'description': 'Embed any KB entries that are missing or stale (model/content changed). Idempotent: skips entries whose stored content_hash still matches. Requires LORE_SEMANTIC_SEARCH=true.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'batch_size': dict({
+          'default': 32,
+          'type': 'integer',
+        }),
+        'confirm_production': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'dry_run': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'limit': dict({
+          'anyOf': list([
+            dict({
+              'type': 'integer',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'kb_backfill_embeddings',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_delete]
+  dict({
+    'description': 'Delete existing KB entry from database',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'confirm': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'kb_id': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'kb_id',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'kb_delete',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_embedding_status]
+  dict({
+    'description': 'Report embedding coverage: total entries, embedded count, missing count, current model, and per-model breakdown.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+      }),
+      'type': 'object',
+    }),
+    'name': 'kb_embedding_status',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_get]
+  dict({
+    'description': 'Get full KB entry by ID',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'kb_id': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'kb_id',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'kb_get',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_ingest_dir]
+  dict({
+    'description': 'Batch ingest directory of markdown files',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'author': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'confirm_production': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'dir_path': dict({
+          'type': 'string',
+        }),
+        'exclude_patterns': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'pattern': dict({
+          'default': '*.md',
+          'type': 'string',
+        }),
+        'recursive': dict({
+          'default': True,
+          'type': 'boolean',
+        }),
+        'source_type': dict({
+          'default': 'system',
+          'type': 'string',
+        }),
+        'strategy': dict({
+          'default': 'chunked',
+          'enum': list([
+            'full',
+            'chunked',
+            'summary',
+          ]),
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'dir_path',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'kb_ingest_dir',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_ingest_doc]
+  dict({
+    'description': 'Ingest single markdown file into KB with change detection',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'author': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'chunk_size': dict({
+          'default': 2000,
+          'type': 'integer',
+        }),
+        'doc_path': dict({
+          'type': 'string',
+        }),
+        'overwrite': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'source_type': dict({
+          'default': 'system',
+          'type': 'string',
+        }),
+        'strategy': dict({
+          'default': 'chunked',
+          'enum': list([
+            'full',
+            'chunked',
+            'summary',
+          ]),
+          'type': 'string',
+        }),
+        'tags': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'required': list([
+        'doc_path',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'kb_ingest_doc',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_list]
+  dict({
+    'description': 'List KB entries',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'limit': dict({
+          'default': 100,
+          'type': 'integer',
+        }),
+        'offset': dict({
+          'default': 0,
+          'type': 'integer',
+        }),
+        'topic': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'kb_list',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_search]
+  dict({
+    'description': 'Search knowledge base. Lexical FTS5 (or LIKE fallback) by default; set semantic=true / hybrid=true / search_mode=hybrid to use vector embeddings + RRF fusion (requires LORE_SEMANTIC_SEARCH=true).',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'caller_agent': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'hybrid': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'min_score': dict({
+          'anyOf': list([
+            dict({
+              'type': 'number',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'min_trust_score': dict({
+          'anyOf': list([
+            dict({
+              'type': 'number',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'parent_query_id': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'query': dict({
+          'type': 'string',
+        }),
+        'required_requery': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'search_mode': dict({
+          'anyOf': list([
+            dict({
+              'enum': list([
+                'fts',
+                'semantic',
+                'hybrid',
+              ]),
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'semantic': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'session_id': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'top_k': dict({
+          'default': 20,
+          'type': 'integer',
+        }),
+        'topic': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'required': list([
+        'query',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'kb_search',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_sync_status]
+  dict({
+    'description': 'Check sync state between source docs and KB',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'dir_path': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'kb_sync_status',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[kb_update]
+  dict({
+    'description': 'Update existing KB entry content, title, topic, tags, verified state, and trust_score',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'content': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'kb_id': dict({
+          'type': 'string',
+        }),
+        'tags': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'title': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'topic': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'trust_score': dict({
+          'anyOf': list([
+            dict({
+              'type': 'number',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'verified': dict({
+          'anyOf': list([
+            dict({
+              'type': 'boolean',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+        }),
+      }),
+      'required': list([
+        'kb_id',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'kb_update',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[log_retrieval_feedback]
+  dict({
+    'description': 'Score or annotate a prior kb_search result by its query_id (retrieval telemetry, issue #5). Supply user_feedback_score, required_requery, notes, or any combination; an omitted field is left unchanged (cannot be reset to null). No effect unless LORE_HARD_NEGATIVE_MINING=true on a PostgreSQL backend.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'notes': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'query_id': dict({
+          'type': 'string',
+        }),
+        'required_requery': dict({
+          'anyOf': list([
+            dict({
+              'type': 'boolean',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'user_feedback_score': dict({
+          'anyOf': list([
+            dict({
+              'type': 'integer',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'required': list([
+        'query_id',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'log_retrieval_feedback',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[mcp_index_get_server]
+  dict({
+    'description': 'Get all tools for a specific MCP server',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'server_id': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'server_id',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'mcp_index_get_server',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[mcp_index_get_tool]
+  dict({
+    'description': 'Get detailed information about a specific tool',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'tool_name': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'tool_name',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'mcp_index_get_tool',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[mcp_index_rebuild]
+  dict({
+    'description': 'Force rebuild of entire MCP index (same as mcp_index_scan)',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+      }),
+      'type': 'object',
+    }),
+    'name': 'mcp_index_rebuild',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[mcp_index_scan]
+  dict({
+    'description': 'Scan all MCP servers and index their tools. By default, scans only configured servers (66% token savings).',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'config_filter': dict({
+          'default': True,
+          'type': 'boolean',
+        }),
+        'triggered_by': dict({
+          'default': 'manual',
+          'type': 'string',
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'mcp_index_scan',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[mcp_index_search]
+  dict({
+    'description': 'Search for MCP tools by description/capability',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'category': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'limit': dict({
+          'default': 20,
+          'type': 'integer',
+        }),
+        'query': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'query',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'mcp_index_search',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[multi_search]
+  dict({
+    'description': 'Search across all configured sources simultaneously (KB, local files, transcripts, corpora) with a single query. Returns combined results from all available sources. For searching within a specific source only, use kb_search, search_local, search_transcripts, or search_corpora instead.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'query': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'query',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'multi_search',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[refresh_hard_negatives]
+  dict({
+    'description': 'Scan retrieval_telemetry for low-scored and requery signals, then upsert hard negative pairs into knowledge.hard_negative_pairs. Use since= for incremental refresh. dry_run=true returns counts without writing. Requires LORE_HARD_NEGATIVE_MINING=true.',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'dry_run': dict({
+          'default': False,
+          'type': 'boolean',
+        }),
+        'since': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'type': 'object',
+    }),
+    'name': 'refresh_hard_negatives',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[search_corpora]
+  dict({
+    'description': 'Search across corpus manifests (JSONL files)',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'corpus_ids': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'query': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'query',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'search_corpora',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[search_local]
+  dict({
+    'description': 'Search local files by content (lexical mode)',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'file_types': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'paths': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'items': dict({
+                'type': 'string',
+              }),
+              'type': 'array',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+        'query': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'query',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'search_local',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[search_transcripts]
+  dict({
+    'description': 'Search transcript segments from Whisper outputs',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'query': dict({
+          'type': 'string',
+        }),
+        'speaker': dict({
+          'anyOf': list([
+            dict({
+              'type': 'string',
+            }),
+            dict({
+              'type': 'null',
+            }),
+          ]),
+          'default': None,
+        }),
+      }),
+      'required': list([
+        'query',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'search_transcripts',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---
+# name: test_tool_schema_snapshot[snapshot_config]
+  dict({
+    'description': 'Snapshot current config',
+    'inputSchema': dict({
+      'additionalProperties': False,
+      'properties': dict({
+        'config_data': dict({
+          'additionalProperties': True,
+          'type': 'object',
+        }),
+        'config_name': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'config_name',
+        'config_data',
+      ]),
+      'type': 'object',
+    }),
+    'name': 'snapshot_config',
+    'outputSchema': dict({
+      'properties': dict({
+        'result': dict({
+          'type': 'string',
+        }),
+      }),
+      'required': list([
+        'result',
+      ]),
+      'type': 'object',
+      'x-fastmcp-wrap-result': True,
+    }),
+  })
+# ---

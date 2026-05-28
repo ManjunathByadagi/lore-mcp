@@ -16,7 +16,7 @@ Environment="DB_USER=latvian_user"
 Environment="DB_PASSWORD=latvian_dev_password_2026"
 Environment="KNOWLEDGE_DATA_DIR=/opt/knowledge-mcp/data"
 EnvironmentFile=/opt/knowledge-mcp/.env
-ExecStart=/opt/knowledge-mcp/venv/bin/python shared/mcp_http_wrapper_sse.py --module knowledge_mcp.server --port 5555 --host 0.0.0.0
+ExecStart=/opt/knowledge-mcp/venv/bin/lore-mcp --host 0.0.0.0 --port 5555
 Restart=always
 RestartSec=5
 KillMode=mixed
