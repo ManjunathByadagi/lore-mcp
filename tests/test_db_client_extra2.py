@@ -157,10 +157,20 @@ def test_try_load_vec_attributeerror_path_via_client(monkeypatch, tmp_path):
 
 
 def test_try_load_vec_attributeerror_with_semantic_on(monkeypatch, tmp_path):
-    """Same path with LORE_SEMANTIC_SEARCH=true logs an error but doesn't crash."""
-    monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
+    """_try_load_vec_extension with semantic=true logs an error but doesn't crash
+    when enable_load_extension raises AttributeError.
+
+    The client is constructed with semantic OFF so that _init_schema doesn't
+    raise on CI environments lacking the sqlite-vec/vec0 shared library. The
+    env var is then flipped to "true" before directly invoking the method with
+    a fake connection that raises AttributeError.
+    """
+    monkeypatch.delenv("LORE_SEMANTIC_SEARCH", raising=False)
     db_path = str(tmp_path / "attr_err_sem.db")
     client = SqliteClient(db_path=db_path)
+
+    # Now pretend semantic is on so the method takes the error-logging branch.
+    monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
 
     class _FakeConn:
         def enable_load_extension(self, _flag):
@@ -191,11 +201,17 @@ def test_try_load_vec_import_error_semantic_off(monkeypatch, tmp_path):
 
 
 def test_try_load_vec_import_error_semantic_on(monkeypatch, tmp_path):
-    """When sqlite_vec is not importable and semantic is on, vec stays False."""
-    monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
+    """When sqlite_vec is not importable and semantic is on, no crash occurs.
+
+    Client is constructed with semantic OFF (so _init_schema doesn't raise on
+    CI systems without the vec0 shared library). Semantic is then enabled before
+    directly calling _try_load_vec_extension with sqlite_vec removed.
+    """
+    monkeypatch.delenv("LORE_SEMANTIC_SEARCH", raising=False)
     db_path = str(tmp_path / "import_err_sem.db")
     client = SqliteClient(db_path=db_path)
 
+    monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
     with patch.dict("sys.modules", {"sqlite_vec": None}):
         client._try_load_vec_extension()
 
@@ -226,10 +242,18 @@ def test_try_load_vec_load_raises_semantic_off(monkeypatch, tmp_path):
 
 
 def test_try_load_vec_load_raises_semantic_on(monkeypatch, tmp_path):
-    """When sqlite_vec.load() raises and semantic is on, vec stays False and no crash."""
-    monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
+    """When sqlite_vec.load() raises and semantic is on, vec stays False and no crash.
+
+    Client is constructed with semantic OFF (so _init_schema doesn't raise on
+    CI systems without the vec0 shared library). Semantic is then enabled before
+    directly calling _try_load_vec_extension with a fake sqlite_vec whose load()
+    raises RuntimeError.
+    """
+    monkeypatch.delenv("LORE_SEMANTIC_SEARCH", raising=False)
     db_path = str(tmp_path / "load_err_sem.db")
     client = SqliteClient(db_path=db_path)
+
+    monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
 
     import types
 

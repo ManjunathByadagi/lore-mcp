@@ -45,13 +45,22 @@ def test_encode_batch_empty_list_returns_empty():
 # ---------------------------------------------------------------------------
 
 
-def _make_fake_model():
-    """Return a MagicMock that quacks like a SentenceTransformer."""
-    model = MagicMock()
-    # encode() returns a list of numpy-array-like objects with .tolist()
-    import numpy as np
+def _make_row(values: list) -> MagicMock:
+    """Return a mock with .tolist() returning *values* (avoids numpy dependency)."""
+    row = MagicMock()
+    row.tolist.return_value = values
+    return row
 
-    model.encode.return_value = np.array([[0.1] * 384, [0.2] * 384], dtype="float32")
+
+def _make_fake_model(n_rows: int = 2, dim: int = 384):
+    """Return a MagicMock that quacks like a SentenceTransformer.
+
+    encode() returns a list of row-mocks each with a .tolist() method so that
+    encode_batch()'s ``[v.tolist() for v in vectors]`` works without numpy.
+    """
+    model = MagicMock()
+    rows = [_make_row([float(i) / dim] * dim) for i in range(n_rows)]
+    model.encode.return_value = rows
     return model
 
 
@@ -192,10 +201,9 @@ def test_encode_batch_returns_float_vectors(monkeypatch):
     monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
     monkeypatch.delenv("LORE_EMBEDDING_MODEL", raising=False)
 
-    import numpy as np
-
-    fake_model = _make_fake_model()
-    fake_model.encode.return_value = np.array([[0.1] * 384], dtype="float32")
+    fake_model = _make_fake_model(n_rows=1)
+    # Override encode return to a single row whose .tolist() gives 384 floats
+    fake_model.encode.return_value = [_make_row([0.1] * 384)]
 
     with patch("sentence_transformers.SentenceTransformer", return_value=fake_model):
         vectors = emb.encode_batch(["hello world"])
@@ -211,11 +219,9 @@ def test_encode_batch_passes_correct_texts(monkeypatch):
     monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
     monkeypatch.delenv("LORE_EMBEDDING_MODEL", raising=False)
 
-    import numpy as np
-
-    fake_model = _make_fake_model()
+    fake_model = _make_fake_model(n_rows=3)
     texts = ["foo", "bar", "baz"]
-    fake_model.encode.return_value = np.zeros((3, 384), dtype="float32")
+    fake_model.encode.return_value = [_make_row([0.0] * 384) for _ in texts]
 
     with patch("sentence_transformers.SentenceTransformer", return_value=fake_model):
         emb.encode_batch(texts)
@@ -234,10 +240,8 @@ def test_encode_text_returns_single_vector(monkeypatch):
     monkeypatch.setenv("LORE_SEMANTIC_SEARCH", "true")
     monkeypatch.delenv("LORE_EMBEDDING_MODEL", raising=False)
 
-    import numpy as np
-
-    fake_model = _make_fake_model()
-    fake_model.encode.return_value = np.array([[0.5] * 384], dtype="float32")
+    fake_model = _make_fake_model(n_rows=1)
+    fake_model.encode.return_value = [_make_row([0.5] * 384)]
 
     with patch("sentence_transformers.SentenceTransformer", return_value=fake_model):
         vec = emb.encode_text("hello")
