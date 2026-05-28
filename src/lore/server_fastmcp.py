@@ -60,6 +60,7 @@ from starlette.responses import JSONResponse
 from lore import __version__ as _PACKAGE_VERSION
 from lore import server as _srv
 from lore.db_client import get_db_client
+from lore.http_auth import BearerAuthMiddleware, auth_enabled, cors_config, warn_if_insecure_bind
 from lore.response import ErrorCodes, ResponseEnvelope
 
 logging.basicConfig(
@@ -907,16 +908,34 @@ async def mcp_plain(request: Request) -> JSONResponse:
     return await _jsonrpc_dispatch(request)
 
 
-def _build_cors_middleware() -> list[Middleware]:
+def _build_http_middleware() -> list[Middleware]:
+    """HTTP middleware stack for the FastMCP app.
+
+    CORS (outermost, with the allow_origins=["*"] + allow_credentials bug fixed
+    via cors_config) followed by the opt-in bearer-auth gate. BearerAuthMiddleware
+    is a no-op unless LORE_API_KEY is set (P1-8), so the production Hermes -> Lore
+    path that sends no auth header keeps working unchanged.
+    """
     return [
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        Middleware(CORSMiddleware, **cors_config()),
+        Middleware(BearerAuthMiddleware),
     ]
+
+
+def build_http_app(path: str = "/stream"):
+    """Build the FastMCP Streamable-HTTP Starlette app with auth + CORS wired in.
+
+    Shared by ``main()`` and the test-suite so the exact middleware stack that
+    runs in production is what gets exercised under test. The custom_route
+    handlers (/mcp, /jsonrpc, /health) are registered on ``mcp`` and therefore
+    included automatically.
+    """
+    return mcp.http_app(
+        path=path,
+        middleware=_build_http_middleware(),
+        stateless_http=True,
+        json_response=True,
+    )
 
 
 def main() -> None:
@@ -946,7 +965,14 @@ def main() -> None:
     if args.host is not None or args.port is not None:
         host = args.host or "127.0.0.1"
         port = args.port or 5556
-        logger.info("Starting Lore FastMCP HTTP server on %s:%s", host, port)
+        # Opt-in bearer auth (P1-8). Warn if exposing an open server on the LAN.
+        warn_if_insecure_bind(host)
+        logger.info(
+            "Starting Lore FastMCP HTTP server on %s:%s (auth %s)",
+            host,
+            port,
+            "ENABLED via LORE_API_KEY" if auth_enabled() else "DISABLED (open)",
+        )
         # /stream — FastMCP native Streamable-HTTP transport (MCP spec 2025-03-26).
         #
         # This endpoint is CURRENTLY UNUSED by production clients: the existing
@@ -968,7 +994,7 @@ def main() -> None:
             path="/stream",
             stateless_http=True,
             json_response=True,
-            middleware=_build_cors_middleware(),
+            middleware=_build_http_middleware(),
             show_banner=False,
         )
         return

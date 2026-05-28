@@ -52,6 +52,10 @@ def fresh_server(monkeypatch):
     import lore.server as s
 
     importlib.reload(s)
+    # P1-5 moved db initialisation out of module scope into main()/lifespan.
+    # Tests that reload the module must manually wire up the db global so
+    # handlers have a live client before any request is dispatched.
+    s.db = s.get_db_client()
     return s
 
 
@@ -237,6 +241,8 @@ def test_legacy_lexical_path_still_works_with_flag_off(monkeypatch):
     import lore.server as s
 
     importlib.reload(s)
+    # P1-5: db is None after reload — wire it up before any handler call.
+    s.db = s.get_db_client()
 
     s.handle_kb_add(topic="t", title="findme", content="legacy lexical search")
     resp = s.handle_kb_search(query="findme")

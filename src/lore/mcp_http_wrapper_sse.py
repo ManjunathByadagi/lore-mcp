@@ -26,6 +26,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from lore import __version__ as _PACKAGE_VERSION
+from lore.http_auth import BearerAuthMiddleware, cors_config, warn_if_insecure_bind
 
 
 class _SseResponse:
@@ -336,15 +337,13 @@ def create_app(mcp_server, server_name: str):
         Route("/health", health_check, methods=["GET"]),
     ]
 
-    # Create Starlette app with CORS middleware
+    # Middleware order matters: CORS is outermost so preflight/responses are
+    # handled even for 401s, then the opt-in bearer-auth gate. Auth is a no-op
+    # unless LORE_API_KEY is set (see lore.http_auth). cors_config() fixes the
+    # legacy allow_origins=["*"] + allow_credentials=True spec violation.
     middleware = [
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        Middleware(CORSMiddleware, **cors_config()),
+        Middleware(BearerAuthMiddleware),
     ]
 
     return Starlette(routes=routes, middleware=middleware)
@@ -369,10 +368,40 @@ def main():
         logger.error(f"Failed to load MCP server from {args.module}: {e}")
         return 1
 
+    # Initialise the database on the imported server module BEFORE serving.
+    #
+    # After P1-5 the module-level ``db`` in lore.server is None at import
+    # time (intentional — no import-time connections).  load_mcp_server()
+    # imports the module but never calls main(), so ``db`` stays None.
+    # A subsequent tools/call dereferences ``db.table(...)`` and crashes with
+    # AttributeError unless we initialise it here, mirroring what server.main()
+    # does before it starts serving.
+    try:
+        import importlib as _importlib
+
+        _srv_module = _importlib.import_module(args.module)
+        if getattr(_srv_module, "db", None) is None:
+            # Mirror server.main(): default to SQLite so the wrapper works
+            # out-of-the-box even when DB_BACKEND is not set in the environment.
+            os.environ.setdefault("DB_BACKEND", "sqlite")
+            from lore.db_client import get_db_client as _get_db_client
+
+            _srv_module.db = _get_db_client()
+            logger.info(
+                "Initialised db on %s (DB_BACKEND=%s)",
+                args.module,
+                os.getenv("DB_BACKEND"),
+            )
+    except Exception as e:
+        logger.error("Failed to initialise db on %s: %s", args.module, e)
+        return 1
+
     # Create the app
     app = create_app(mcp_server, args.module)
 
     logger.info(f"Starting HTTP/SSE MCP Server on {args.host}:{args.port}")
+
+    warn_if_insecure_bind(args.host)
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=True)
 

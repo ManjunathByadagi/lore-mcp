@@ -65,15 +65,21 @@ if SENTRY_DSN:
 # Initialize MCP server
 app = Server("lore")
 
-# Database Configuration (will be initialized in main())
-# Database Configuration
-try:
-    db = get_db_client()
-    backend = os.getenv("DB_BACKEND", "local")
-    logger.info(f"Connected to database backend: {backend}")
-except Exception as e:
-    logger.error(f"Failed to initialize database: {e}")
-    db = None
+# Database Configuration.
+#
+# The module-global ``db`` is initialised exactly once at startup — NOT at
+# import time. Connecting at import would run before main()/the FastMCP
+# lifespan can apply the ``DB_BACKEND=sqlite`` default (os.environ.setdefault),
+# so it would attempt to connect against whatever DB_BACKEND happens to be in
+# the environment (defaulting to Supabase) and log a spurious failure / open a
+# stray connection that is immediately discarded when main() re-initialises.
+#
+# Initialisation happens in exactly two places, both BEFORE any handler runs:
+#   - lore.server.main()                 (stdio + HTTP/SSE entry point)
+#   - lore.server_fastmcp.lore_lifespan  (FastMCP startup lifespan)
+# Handlers reference this module global directly, which is guaranteed to be a
+# live client by the time a request is dispatched.
+db = None
 
 
 # Search Configuration (consolidated from search-mcp).
@@ -595,7 +601,7 @@ _TOOL_DEFINITIONS = [
                     "type": "string",
                     "enum": ["full", "chunked", "summary"],
                     "default": "chunked",
-                    "description": "Ingestion strategy: full (one entry), chunked (by sections), summary (GPT summary)",
+                    "description": "Ingestion strategy: full (one entry) or chunked (by sections). 'summary' is not provided by Lore (LLM-free); generate summaries in the caller — see issue #19.",
                 },
                 "chunk_size": {
                     "type": "integer",
@@ -3110,10 +3116,16 @@ def handle_kb_ingest_doc(
                 kb_ids.append(kb_id)
 
         elif strategy == "summary":
-            # TODO: Implement GPT summary strategy
+            # Lore is intentionally LLM-free: summary generation requires an LLM
+            # and belongs to the caller/scheduler, not the knowledge layer. The
+            # caller should produce the summary and store it via kb_add or the
+            # 'full'/'chunked' strategies. See issue #19 for the documented
+            # caller/scheduler-owned workflow.
             return ResponseEnvelope.error(
                 ErrorCodes.INVALID_ARGUMENT,
-                "Summary strategy not yet implemented. Use 'full' or 'chunked'.",
+                "Summary strategy is not provided by Lore (it is LLM-free). "
+                "Generate the summary in the caller and store it via 'full' or "
+                "'chunked'. See issue #19.",
             )
 
         # Update sync tracking.
@@ -4382,12 +4394,23 @@ def main() -> None:
         # HTTP/SSE mode — delegate to the wrapper, which mounts our 'app'.
         import uvicorn
 
+        from .http_auth import auth_enabled, warn_if_insecure_bind
         from .mcp_http_wrapper_sse import create_app
 
         host = args.host or "127.0.0.1"
         port = args.port or 5555
+        # Opt-in bearer auth (P1-8): enforced only when LORE_API_KEY is set.
+        # The create_app() wrapper installs the shared BearerAuthMiddleware;
+        # here we only emit the prominent warning when binding to a non-local
+        # host without a key (auth disabled => open on the LAN).
+        warn_if_insecure_bind(host)
+        logger.info(
+            "Starting Lore MCP HTTP server on %s:%s (auth %s)",
+            host,
+            port,
+            "ENABLED via LORE_API_KEY" if auth_enabled() else "DISABLED (open)",
+        )
         starlette_app = create_app(app, "lore.server")
-        logger.info(f"Starting Lore MCP HTTP server on {host}:{port}")
         uvicorn.run(starlette_app, host=host, port=port, log_level="info")
         return
 
