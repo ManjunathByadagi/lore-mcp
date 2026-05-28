@@ -51,8 +51,10 @@ CREATE TABLE IF NOT EXISTS knowledge.kb_doc_sync (
     doc_path     TEXT PRIMARY KEY,
     doc_hash     TEXT NOT NULL,
     kb_ids       JSONB NOT NULL DEFAULT '[]'::jsonb,
-    last_synced_at   TIMESTAMPTZ,
-    last_modified_at TIMESTAMPTZ,
+    -- The kb_doc_sync write path always supplies both timestamps; NOT NULL
+    -- DEFAULT NOW() matches production intent and prevents NULL drift.
+    last_synced_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_modified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     strategy     TEXT,
     metadata     JSONB DEFAULT '{}'::jsonb
 );

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   test:
@@ -71,7 +71,29 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        # [semantic] pulls in sentence-transformers + onnxruntime + pgvector so
+        # the live KB CRUD/FTS/semantic/hybrid integration tests actually RUN
+        # (with LORE_SEMANTIC_SEARCH=true below) instead of skipping. Without
+        # the embedder, _embed_kb_entry() can't populate kb_embeddings and the
+        # KB-path tests skip on the _pg_available() guard.
+        run: pip install -e ".[dev,semantic]"
+
+      - name: Cache embedding model
+        # all-MiniLM-L6-v2 (~90MB ONNX) is downloaded from the HF hub on first
+        # encode. Cache it across runs so the integration job stays fast.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-onnx
+
+      - name: Pre-warm embedding model
+        # Download + load all-MiniLM-L6-v2 once here so the heavy first encode
+        # happens OUTSIDE the 30s per-test timeout (pyproject [tool.pytest]).
+        # On a cache hit this is a fast no-op; on a cache miss it populates the
+        # cache restored above and keeps the timed test run snappy.
+        env:
+          LORE_SEMANTIC_SEARCH: "true"
+        run: python -c "from lore.embeddings import encode_text; print('embed dim', len(encode_text('warmup')))"
 
       - name: Bootstrap Postgres schema
         # Loads the base knowledge schema that LocalPostgresClient._init_schema
@@ -92,6 +114,10 @@ jobs:
           DB_USER: lore_user
           DB_PASSWORD: lore
           LORE_HARD_NEGATIVE_MINING: "true"
+          # Enables the KB write-path embedder + semantic/hybrid search so the
+          # Postgres KB CRUD/FTS/search tests in test_postgres_embeddings.py run
+          # for real (they skip on the _pg_available() guard otherwise).
+          LORE_SEMANTIC_SEARCH: "true"
           LORE_ENV: staging
           KNOWLEDGE_DATA_DIR: /tmp/lore-test-ci
         run: pytest tests/integration/ -v --tb=short -m "integration or slow"
