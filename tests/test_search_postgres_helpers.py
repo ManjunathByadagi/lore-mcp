@@ -86,8 +86,15 @@ class _MockConnection:
 class _MockPgClient:
     """Fake LocalPostgresClient returning a controlled cursor."""
 
-    def __init__(self, rows=None, col_names=None, count=0, fail_connect=False,
-                 vec_loaded=True, vector_type="vector"):
+    def __init__(
+        self,
+        rows=None,
+        col_names=None,
+        count=0,
+        fail_connect=False,
+        vec_loaded=True,
+        vector_type="vector",
+    ):
         self._rows = rows or []
         self._col_names = col_names or []
         self._count = count
@@ -116,7 +123,17 @@ def test_fts_search_postgres_connection_failure():
 def test_fts_search_postgres_returns_rows():
     """With a working cursor, rows are returned as dicts."""
     rows = [("kb_1", "Python tips", "python", "[]", None, None, None, 1.0, 0.8)]
-    col_names = ["kb_id", "title", "topic", "tags", "author", "source_type", "verified", "trust_score", "score"]
+    col_names = [
+        "kb_id",
+        "title",
+        "topic",
+        "tags",
+        "author",
+        "source_type",
+        "verified",
+        "trust_score",
+        "score",
+    ]
     client = _MockPgClient(rows=rows, col_names=col_names)
     result = srch.fts_search_postgres(client, "python", None, 10)
     assert len(result) == 1
@@ -127,7 +144,17 @@ def test_fts_search_postgres_returns_rows():
 def test_fts_search_postgres_with_topic_filter():
     """Topic filter is included in the query (no crash); rows still returned."""
     rows = [("kb_t", "Topic entry", "python", "[]", None, None, None, 1.0, 0.5)]
-    col_names = ["kb_id", "title", "topic", "tags", "author", "source_type", "verified", "trust_score", "score"]
+    col_names = [
+        "kb_id",
+        "title",
+        "topic",
+        "tags",
+        "author",
+        "source_type",
+        "verified",
+        "trust_score",
+        "score",
+    ]
     client = _MockPgClient(rows=rows, col_names=col_names)
     result = srch.fts_search_postgres(client, "async", "python", 10)
     assert len(result) == 1
@@ -136,9 +163,20 @@ def test_fts_search_postgres_with_topic_filter():
 
 def test_fts_search_postgres_empty_results():
     """Empty result set returns empty list."""
-    client = _MockPgClient(rows=[], col_names=["kb_id", "title", "topic", "tags",
-                                                "author", "source_type", "verified",
-                                                "trust_score", "score"])
+    client = _MockPgClient(
+        rows=[],
+        col_names=[
+            "kb_id",
+            "title",
+            "topic",
+            "tags",
+            "author",
+            "source_type",
+            "verified",
+            "trust_score",
+            "score",
+        ],
+    )
     result = srch.fts_search_postgres(client, "notfound", None, 10)
     assert result == []
 
@@ -178,7 +216,17 @@ def test_vector_search_postgres_connection_failure():
 
 def test_vector_search_postgres_returns_rows():
     rows = [("kb_v1", "Vector entry", "ml", "[]", None, None, None, 1.0, 0.05)]
-    col_names = ["kb_id", "title", "topic", "tags", "author", "source_type", "verified", "trust_score", "distance"]
+    col_names = [
+        "kb_id",
+        "title",
+        "topic",
+        "tags",
+        "author",
+        "source_type",
+        "verified",
+        "trust_score",
+        "distance",
+    ]
     client = _MockPgClient(rows=rows, col_names=col_names, vec_loaded=True)
     result = srch.vector_search_postgres(client, [0.1, 0.2, 0.3], None, 10)
     assert len(result) == 1
@@ -187,7 +235,17 @@ def test_vector_search_postgres_returns_rows():
 
 def test_vector_search_postgres_with_topic_filter():
     rows = [("kb_v2", "ML entry", "ml", "[]", None, None, None, 0.9, 0.1)]
-    col_names = ["kb_id", "title", "topic", "tags", "author", "source_type", "verified", "trust_score", "distance"]
+    col_names = [
+        "kb_id",
+        "title",
+        "topic",
+        "tags",
+        "author",
+        "source_type",
+        "verified",
+        "trust_score",
+        "distance",
+    ]
     client = _MockPgClient(rows=rows, col_names=col_names, vec_loaded=True)
     result = srch.vector_search_postgres(client, [0.1, 0.2], "ml", 10)
     assert len(result) == 1
@@ -196,7 +254,17 @@ def test_vector_search_postgres_with_topic_filter():
 def test_vector_search_postgres_halfvec_type():
     """halfvec vector_type is used without crash."""
     rows = [("kb_hv", "Half vec entry", "ml", "[]", None, None, None, 1.0, 0.03)]
-    col_names = ["kb_id", "title", "topic", "tags", "author", "source_type", "verified", "trust_score", "distance"]
+    col_names = [
+        "kb_id",
+        "title",
+        "topic",
+        "tags",
+        "author",
+        "source_type",
+        "verified",
+        "trust_score",
+        "distance",
+    ]
     client = _MockPgClient(rows=rows, col_names=col_names, vec_loaded=True, vector_type="halfvec")
     result = srch.vector_search_postgres(client, [0.1, 0.2], None, 10)
     assert len(result) == 1
@@ -228,10 +296,28 @@ def test_vector_search_postgres_cursor_error():
 def _make_pg_client_for_hybrid(fts_rows, vec_rows, corpus_count=100):
     """Create a mock PG client that returns fts_rows or vec_rows based on SQL."""
 
-    fts_col_names = ["kb_id", "title", "topic", "tags", "author", "source_type",
-                     "verified", "trust_score", "score"]
-    vec_col_names = ["kb_id", "title", "topic", "tags", "author", "source_type",
-                     "verified", "trust_score", "distance"]
+    fts_col_names = [
+        "kb_id",
+        "title",
+        "topic",
+        "tags",
+        "author",
+        "source_type",
+        "verified",
+        "trust_score",
+        "score",
+    ]
+    vec_col_names = [
+        "kb_id",
+        "title",
+        "topic",
+        "tags",
+        "author",
+        "source_type",
+        "verified",
+        "trust_score",
+        "distance",
+    ]
 
     class _MultiCursor:
         """Returns different data depending on the SQL executed."""
@@ -289,8 +375,7 @@ def test_hybrid_search_postgres_fts_mode():
     fts_rows = [("kb_f1", "FTS entry", "python", "[]", None, None, None, 1.0, 0.8)]
     client = _make_pg_client_for_hybrid(fts_rows=fts_rows, vec_rows=[])
     result = srch.hybrid_search_postgres(
-        client, "python", topic=None, top_k=10, search_mode="fts",
-        encode_query=lambda q: [0.1, 0.2]
+        client, "python", topic=None, top_k=10, search_mode="fts", encode_query=lambda q: [0.1, 0.2]
     )
     assert len(result) == 1
     assert result[0]["kb_id"] == "kb_f1"
@@ -303,8 +388,12 @@ def test_hybrid_search_postgres_semantic_mode():
     vec_rows = [("kb_v1", "Vec entry", "ml", "[]", None, None, None, 1.0, 0.05)]
     client = _make_pg_client_for_hybrid(fts_rows=[], vec_rows=vec_rows)
     result = srch.hybrid_search_postgres(
-        client, "vector search", topic=None, top_k=10, search_mode="semantic",
-        encode_query=lambda q: [0.1, 0.2]
+        client,
+        "vector search",
+        topic=None,
+        top_k=10,
+        search_mode="semantic",
+        encode_query=lambda q: [0.1, 0.2],
     )
     assert len(result) == 1
     assert result[0]["kb_id"] == "kb_v1"
@@ -322,8 +411,12 @@ def test_hybrid_search_postgres_hybrid_mode_fuses():
     ]
     client = _make_pg_client_for_hybrid(fts_rows=fts_rows, vec_rows=vec_rows)
     result = srch.hybrid_search_postgres(
-        client, "test", topic=None, top_k=10, search_mode="hybrid",
-        encode_query=lambda q: [0.1, 0.2]
+        client,
+        "test",
+        topic=None,
+        top_k=10,
+        search_mode="hybrid",
+        encode_query=lambda q: [0.1, 0.2],
     )
     # kb_both should be first (appears in both lists → higher RRF score)
     assert len(result) >= 1
@@ -335,8 +428,12 @@ def test_hybrid_search_postgres_hybrid_no_vec_rows():
     fts_rows = [("kb_f", "FTS only", "ml", "[]", None, None, None, 1.0, 0.7)]
     client = _make_pg_client_for_hybrid(fts_rows=fts_rows, vec_rows=[])
     result = srch.hybrid_search_postgres(
-        client, "test", topic=None, top_k=10, search_mode="hybrid",
-        encode_query=lambda q: [0.1, 0.2]
+        client,
+        "test",
+        topic=None,
+        top_k=10,
+        search_mode="hybrid",
+        encode_query=lambda q: [0.1, 0.2],
     )
     assert len(result) == 1
     assert result[0]["kb_id"] == "kb_f"
@@ -347,8 +444,12 @@ def test_hybrid_search_postgres_hybrid_no_fts_rows():
     vec_rows = [("kb_v", "Vec only", "ml", "[]", None, None, None, 1.0, 0.1)]
     client = _make_pg_client_for_hybrid(fts_rows=[], vec_rows=vec_rows)
     result = srch.hybrid_search_postgres(
-        client, "test", topic=None, top_k=10, search_mode="hybrid",
-        encode_query=lambda q: [0.1, 0.2]
+        client,
+        "test",
+        topic=None,
+        top_k=10,
+        search_mode="hybrid",
+        encode_query=lambda q: [0.1, 0.2],
     )
     assert len(result) == 1
     assert result[0]["kb_id"] == "kb_v"
@@ -358,8 +459,12 @@ def test_hybrid_search_postgres_hybrid_no_rows():
     """When both FTS and vector return empty, returns empty list."""
     client = _make_pg_client_for_hybrid(fts_rows=[], vec_rows=[])
     result = srch.hybrid_search_postgres(
-        client, "test", topic=None, top_k=10, search_mode="hybrid",
-        encode_query=lambda q: [0.1, 0.2]
+        client,
+        "test",
+        topic=None,
+        top_k=10,
+        search_mode="hybrid",
+        encode_query=lambda q: [0.1, 0.2],
     )
     assert result == []
 
@@ -369,8 +474,7 @@ def test_hybrid_search_postgres_encode_query_none():
     fts_rows = [("kb_fts", "FTS entry", "ml", "[]", None, None, None, 1.0, 0.6)]
     client = _make_pg_client_for_hybrid(fts_rows=fts_rows, vec_rows=[])
     result = srch.hybrid_search_postgres(
-        client, "test", topic=None, top_k=10, search_mode="hybrid",
-        encode_query=None
+        client, "test", topic=None, top_k=10, search_mode="hybrid", encode_query=None
     )
     # FTS rows returned since encode_query is None (no vector search)
     assert len(result) == 1
@@ -387,8 +491,7 @@ def test_hybrid_search_postgres_connection_failure_corpus():
             raise RuntimeError("can't connect")
 
     result = srch.hybrid_search_postgres(
-        _FailClient(), "test", topic=None, top_k=10, search_mode="fts",
-        encode_query=None
+        _FailClient(), "test", topic=None, top_k=10, search_mode="fts", encode_query=None
     )
     # Should return empty (can't get connection for FTS either)
     assert isinstance(result, list)
@@ -434,8 +537,7 @@ def test_hybrid_search_postgres_encode_query_raises():
         raise RuntimeError("embedding model unavailable")
 
     result = srch.hybrid_search_postgres(
-        client, "test", topic=None, top_k=10, search_mode="hybrid",
-        encode_query=_fail_encode
+        client, "test", topic=None, top_k=10, search_mode="hybrid", encode_query=_fail_encode
     )
     # FTS rows are returned (vector search skipped due to exception)
     assert len(result) == 1
@@ -448,8 +550,7 @@ def test_hybrid_search_postgres_debug_mode(monkeypatch):
     fts_rows = [("kb_d1", "Debug entry", "ml", "[]", None, None, None, 1.0, 0.5)]
     client = _make_pg_client_for_hybrid(fts_rows=fts_rows, vec_rows=[])
     result = srch.hybrid_search_postgres(
-        client, "debug test", topic=None, top_k=10, search_mode="fts",
-        encode_query=None
+        client, "debug test", topic=None, top_k=10, search_mode="fts", encode_query=None
     )
     assert isinstance(result, list)
     monkeypatch.delenv("LORE_DEBUG_SEARCH", raising=False)
@@ -477,6 +578,7 @@ class _SqliteFakeClient:
                 class _Cur:
                     def fetchone(self):
                         return (100,)
+
                 return _Cur()
 
         return _Conn()
@@ -486,8 +588,12 @@ def test_hybrid_search_sqlite_no_fts5_no_vec_returns_empty():
     """With no FTS5 and no vec extension, both row sets are empty → empty result."""
     client = _SqliteFakeClient(fts5=False, vec=False)
     result = srch.hybrid_search_sqlite(
-        client, "test", topic=None, top_k=10, search_mode="hybrid",
-        encode_query=lambda q: [0.1, 0.2]
+        client,
+        "test",
+        topic=None,
+        top_k=10,
+        search_mode="hybrid",
+        encode_query=lambda q: [0.1, 0.2],
     )
     assert result == []
 
@@ -496,8 +602,7 @@ def test_hybrid_search_sqlite_fts_mode_no_fts5():
     """search_mode='fts' but no FTS5 → empty rows returned."""
     client = _SqliteFakeClient(fts5=False, vec=False)
     result = srch.hybrid_search_sqlite(
-        client, "test", topic=None, top_k=10, search_mode="fts",
-        encode_query=None
+        client, "test", topic=None, top_k=10, search_mode="fts", encode_query=None
     )
     assert result == []
 
@@ -512,8 +617,7 @@ def test_hybrid_search_sqlite_semantic_mode_no_vec():
         return [0.1, 0.2]
 
     result = srch.hybrid_search_sqlite(
-        client, "test", topic=None, top_k=10, search_mode="semantic",
-        encode_query=_enc
+        client, "test", topic=None, top_k=10, search_mode="semantic", encode_query=_enc
     )
     # encode is called but vector search sees vec_extension_loaded=False → empty
     assert result == []
@@ -528,8 +632,7 @@ def test_hybrid_search_sqlite_encode_query_raises():
         raise RuntimeError("embedding unavailable")
 
     result = srch.hybrid_search_sqlite(
-        client, "test", topic=None, top_k=10, search_mode="hybrid",
-        encode_query=_fail
+        client, "test", topic=None, top_k=10, search_mode="hybrid", encode_query=_fail
     )
     # No crash — vec_rows stays empty
     assert result == []
@@ -539,8 +642,7 @@ def test_hybrid_search_sqlite_connection_failure_for_count():
     """Corpus count failure defaults to 0 (doesn't crash)."""
     client = _SqliteFakeClient(fts5=False, vec=False, fail_count=True)
     result = srch.hybrid_search_sqlite(
-        client, "test", topic=None, top_k=10, search_mode="fts",
-        encode_query=None
+        client, "test", topic=None, top_k=10, search_mode="fts", encode_query=None
     )
     assert result == []  # no FTS5 anyway
 

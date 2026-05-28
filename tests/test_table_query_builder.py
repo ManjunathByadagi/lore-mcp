@@ -343,6 +343,7 @@ def test_serialize_value_dict_to_json():
     q = _tq()
     result = q._serialize_value({"key": "val"})
     import json
+
     assert json.loads(result) == {"key": "val"}
 
 

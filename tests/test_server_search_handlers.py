@@ -81,6 +81,7 @@ class _FakeSearchDb:
 def _no_mining(monkeypatch):
     """Disable telemetry mining so _finalize_search_response is a no-op."""
     import lore.telemetry as tel
+
     monkeypatch.setattr(tel, "mining_enabled", lambda: False)
 
 
@@ -473,66 +474,42 @@ def test_coerce_arguments_empty_schema():
 
 
 def test_coerce_arguments_json_array_coerced():
-    schema = {
-        "properties": {
-            "tags": {"type": "array", "items": {"type": "string"}}
-        }
-    }
+    schema = {"properties": {"tags": {"type": "array", "items": {"type": "string"}}}}
     args = {"tags": '["python", "testing"]'}
     result = srv._coerce_arguments(args, schema)
     assert result["tags"] == ["python", "testing"]
 
 
 def test_coerce_arguments_comma_separated_array():
-    schema = {
-        "properties": {
-            "tags": {"type": "array", "items": {"type": "string"}}
-        }
-    }
+    schema = {"properties": {"tags": {"type": "array", "items": {"type": "string"}}}}
     args = {"tags": "python, testing, async"}
     result = srv._coerce_arguments(args, schema)
     assert result["tags"] == ["python", "testing", "async"]
 
 
 def test_coerce_arguments_space_separated_array():
-    schema = {
-        "properties": {
-            "tags": {"type": "array", "items": {"type": "string"}}
-        }
-    }
+    schema = {"properties": {"tags": {"type": "array", "items": {"type": "string"}}}}
     args = {"tags": "python testing async"}
     result = srv._coerce_arguments(args, schema)
     assert result["tags"] == ["python", "testing", "async"]
 
 
 def test_coerce_arguments_object_coerced():
-    schema = {
-        "properties": {
-            "config": {"type": "object"}
-        }
-    }
+    schema = {"properties": {"config": {"type": "object"}}}
     args = {"config": '{"key": "value"}'}
     result = srv._coerce_arguments(args, schema)
     assert result["config"] == {"key": "value"}
 
 
 def test_coerce_arguments_already_list_passthrough():
-    schema = {
-        "properties": {
-            "tags": {"type": "array", "items": {"type": "string"}}
-        }
-    }
+    schema = {"properties": {"tags": {"type": "array", "items": {"type": "string"}}}}
     args = {"tags": ["a", "b"]}
     result = srv._coerce_arguments(args, schema)
     assert result["tags"] == ["a", "b"]
 
 
 def test_coerce_arguments_missing_field_skipped():
-    schema = {
-        "properties": {
-            "tags": {"type": "array", "items": {"type": "string"}}
-        }
-    }
+    schema = {"properties": {"tags": {"type": "array", "items": {"type": "string"}}}}
     args = {"title": "No tags here"}
     result = srv._coerce_arguments(args, schema)
     assert "tags" not in result

@@ -191,9 +191,7 @@ def test_kb_add_wrapper_calls_through(monkeypatch):
 def test_kb_add_wrapper_coerces_tags_string(monkeypatch):
     """Tags given as a comma-separated string are coerced to a list (no crash)."""
     monkeypatch.setattr(srv, "db", _FakeDb())
-    result = fm.kb_add(
-        topic="python", title="Test", content="c", tags="python, async"
-    )
+    result = fm.kb_add(topic="python", title="Test", content="c", tags="python, async")
     data = json.loads(result)
     # The handler succeeds — tags are inserted via insert() which the FakeDb records
     assert data["ok"] is True
@@ -256,6 +254,7 @@ def test_kb_delete_wrapper_no_confirm(monkeypatch):
 def test_kb_search_wrapper_returns_results(monkeypatch):
     """FastMCP kb_search delegates to handle_kb_search (legacy path)."""
     import lore.telemetry as tel
+
     monkeypatch.setattr(tel, "mining_enabled", lambda: False)
     monkeypatch.delenv("LORE_SEMANTIC_SEARCH", raising=False)
     monkeypatch.delenv("DB_BACKEND", raising=False)
