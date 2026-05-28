@@ -184,9 +184,9 @@ source = ["src"]
 branch = true
 
 [tool.coverage.report]
-# Coverage floor — set to the current measured coverage (31%) rounded down to
-# the nearest 5. Raise this as the integration/e2e gaps get unit-test coverage.
-fail_under = 30
+# Coverage floor — raised after round-1 unit test push (~40% → ~49%).
+# Set 3 points below measured unit-suite baseline (49%) to give headroom.
+fail_under = 46
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
