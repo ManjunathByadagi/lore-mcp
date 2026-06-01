@@ -619,10 +619,12 @@ def deduplicate_results(results: list[dict], threshold: float = 0.9) -> str:
     return _json(_srv.handle_deduplicate_results(results=results, threshold=threshold))
 
 
-@mcp.tool(description=(
-    "Group results into metadata-based buckets (such as file type, "
-    "corpus, speaker, or other categories)."
-))
+@mcp.tool(
+    description=(
+        "Group results into metadata-based buckets (such as file type, "
+        "corpus, speaker, or other categories)."
+    )
+)
 def cluster_results(results: list[dict]) -> str:
     return _json(_srv.handle_cluster_results(results=results))
 
